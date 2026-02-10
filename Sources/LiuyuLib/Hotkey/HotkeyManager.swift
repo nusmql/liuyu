@@ -49,7 +49,7 @@ public class HotkeyManager {
             options: .defaultTap,
             eventsOfInterest: mask,
             callback: { _, _, event, refcon -> Unmanaged<CGEvent>? in
-                guard let refcon else { return Unmanaged.passRetained(event) }
+                guard let refcon else { return Unmanaged.passUnretained(event) }
                 let manager = Unmanaged<HotkeyManager>.fromOpaque(refcon).takeUnretainedValue()
                 return manager.handleEvent(event)
             },
@@ -91,7 +91,7 @@ public class HotkeyManager {
             return nil // suppress the event
         }
 
-        return Unmanaged.passRetained(event)
+        return Unmanaged.passUnretained(event)
     }
 }
 
