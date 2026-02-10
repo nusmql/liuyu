@@ -142,7 +142,9 @@ public class RecordingController: ObservableObject {
             ) else { return }
 
             var error: NSError?
-            var hasData = false
+            // The converter calls this block synchronously, so the capture is safe.
+            // Use nonisolated(unsafe) to silence the Swift 6 concurrency warning.
+            nonisolated(unsafe) var hasData = false
             converter.convert(to: convertedBuffer, error: &error) { _, status in
                 if hasData {
                     status.pointee = .noDataNow
