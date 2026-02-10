@@ -1,4 +1,4 @@
-// swift-tools-version: 5.9
+// swift-tools-version: 6.0
 import PackageDescription
 
 let package = Package(
@@ -8,17 +8,26 @@ let package = Package(
         .package(url: "https://github.com/JakubMazur/lucide-icons-swift.git", from: "0.563.1")
     ],
     targets: [
-        .executableTarget(
-            name: "Liuyu",
+        // Library target with all app logic (testable)
+        .target(
+            name: "LiuyuLib",
             dependencies: [
                 .product(name: "LucideIcons", package: "lucide-icons-swift")
             ],
-            path: "Sources/Liuyu",
+            path: "Sources/LiuyuLib",
+            // Resources excluded from SPM (Info.plist forbidden as SPM resource);
+            // copied into .app bundle by scripts/bundle.sh instead
             exclude: ["Resources"]
+        ),
+        // Executable target with just the entry point
+        .executableTarget(
+            name: "Liuyu",
+            dependencies: ["LiuyuLib"],
+            path: "Sources/Liuyu"
         ),
         .testTarget(
             name: "LiuyuTests",
-            dependencies: ["Liuyu"],
+            dependencies: ["LiuyuLib"],
             path: "Tests/LiuyuTests"
         )
     ]
