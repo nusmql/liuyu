@@ -20,7 +20,7 @@ public class SettingsWindowController: NSObject, NSWindowDelegate {
             backing: .buffered,
             defer: false
         )
-        window.title = "Liuyu Settings"
+        window.title = ""
         window.minSize = NSSize(width: 600, height: 400)
         window.center()
         window.contentView = NSHostingView(rootView: SettingsView())
