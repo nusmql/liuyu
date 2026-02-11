@@ -17,5 +17,8 @@ mkdir -p "${BUNDLE_DIR}/Contents/Resources"
 cp "${BUILD_DIR}/${BINARY_NAME}" "${BUNDLE_DIR}/Contents/MacOS/"
 cp "Sources/LiuyuLib/Resources/Info.plist" "${BUNDLE_DIR}/Contents/"
 
+echo "Signing app bundle..."
+codesign --force --sign "Liuyu Dev" --entitlements "Sources/LiuyuLib/Resources/Liuyu.entitlements" --identifier "com.liuyu.app" "${BUNDLE_DIR}"
+
 echo "App bundle created at build/${APP_NAME}"
 echo "Run with: open build/${APP_NAME}"

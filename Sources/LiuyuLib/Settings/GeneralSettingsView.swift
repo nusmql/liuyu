@@ -1,9 +1,12 @@
 import SwiftUI
 import AVFoundation
+import Combine
 
 struct GeneralSettingsView: View {
     @State private var accessibilityGranted = false
     @State private var microphoneGranted = false
+
+    private let timer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
     var body: some View {
         Form {
@@ -15,9 +18,7 @@ struct GeneralSettingsView: View {
                     Spacer()
                     if !accessibilityGranted {
                         Button("Grant") {
-                            NSWorkspace.shared.open(
-                                URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!
-                            )
+                            HotkeyManager.requestAccessibilityPermission()
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
@@ -37,9 +38,10 @@ struct GeneralSettingsView: View {
                     Spacer()
                     if !microphoneGranted {
                         Button("Grant") {
-                            NSWorkspace.shared.open(
-                                URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")!
-                            )
+                            Task {
+                                let granted = await RecordingController.requestMicrophonePermission()
+                                await MainActor.run { microphoneGranted = granted }
+                            }
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
@@ -55,6 +57,7 @@ struct GeneralSettingsView: View {
         }
         .formStyle(.grouped)
         .onAppear { refreshPermissions() }
+        .onReceive(timer) { _ in refreshPermissions() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             refreshPermissions()
         }
