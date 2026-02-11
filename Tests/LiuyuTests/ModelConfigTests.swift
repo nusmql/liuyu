@@ -1,0 +1,138 @@
+import XCTest
+@testable import LiuyuLib
+
+final class ModelConfigTests: XCTestCase {
+
+    // MARK: - ModelConfig Codable
+
+    func testModelConfigRoundtrip() throws {
+        let config = ModelConfig(
+            provider: .groq,
+            modelId: "whisper-large-v3",
+            endpoint: "https://api.groq.com/openai/v1/audio/transcriptions",
+            apiFormat: .whisperMultipart,
+            isActive: true
+        )
+
+        let data = try JSONEncoder().encode(config)
+        let decoded = try JSONDecoder().decode(ModelConfig.self, from: data)
+
+        XCTAssertEqual(config.id, decoded.id)
+        XCTAssertEqual(config.provider, decoded.provider)
+        XCTAssertEqual(config.modelId, decoded.modelId)
+        XCTAssertEqual(config.endpoint, decoded.endpoint)
+        XCTAssertEqual(config.apiFormat, decoded.apiFormat)
+        XCTAssertEqual(config.isActive, decoded.isActive)
+    }
+
+    func testModelConfigKeychainKey() {
+        let config = ModelConfig(
+            provider: .openai,
+            modelId: "whisper-1",
+            endpoint: "https://api.openai.com/v1/audio/transcriptions"
+        )
+        XCTAssertTrue(config.keychainKey.hasPrefix("model-config-"))
+        XCTAssertTrue(config.keychainKey.contains(config.id.uuidString))
+    }
+
+    // MARK: - ModelConfigStore
+
+    func testSaveAndLoadConfigs() {
+        let store = ModelConfigStore()
+        let key = "modelConfigs"
+
+        // Clean up first
+        UserDefaults.standard.removeObject(forKey: key)
+
+        let configs = [
+            ModelConfig(provider: .openai, modelId: "whisper-1",
+                        endpoint: "https://api.openai.com/v1/audio/transcriptions", isActive: true),
+            ModelConfig(provider: .glm, modelId: "glm-asr-2512",
+                        endpoint: "https://open.bigmodel.cn/api/paas/v4/audio/transcriptions")
+        ]
+
+        store.saveConfigs(configs)
+        let loaded = store.loadConfigs()
+
+        XCTAssertEqual(loaded.count, 2)
+        XCTAssertEqual(loaded[0].provider, .openai)
+        XCTAssertEqual(loaded[1].provider, .glm)
+
+        // Clean up
+        UserDefaults.standard.removeObject(forKey: key)
+    }
+
+    func testActiveConfig() {
+        let store = ModelConfigStore()
+        let key = "modelConfigs"
+        UserDefaults.standard.removeObject(forKey: key)
+
+        let configs = [
+            ModelConfig(provider: .openai, modelId: "whisper-1",
+                        endpoint: "https://api.openai.com/v1/audio/transcriptions", isActive: false),
+            ModelConfig(provider: .groq, modelId: "whisper-large-v3",
+                        endpoint: "https://api.groq.com/openai/v1/audio/transcriptions", isActive: true)
+        ]
+
+        store.saveConfigs(configs)
+
+        let active = store.activeConfig()
+        XCTAssertNotNil(active)
+        XCTAssertEqual(active?.provider, .groq)
+
+        UserDefaults.standard.removeObject(forKey: key)
+    }
+
+    func testActiveConfigReturnsNilWhenEmpty() {
+        let store = ModelConfigStore()
+        UserDefaults.standard.removeObject(forKey: "modelConfigs")
+
+        XCTAssertNil(store.activeConfig())
+    }
+
+    // MARK: - Provider Catalog
+
+    func testCatalogHasExpectedProviders() {
+        XCTAssertNotNil(ProviderDefinition.catalog[.openai])
+        XCTAssertNotNil(ProviderDefinition.catalog[.groq])
+        XCTAssertNotNil(ProviderDefinition.catalog[.glm])
+        XCTAssertNotNil(ProviderDefinition.catalog[.alibaba])
+        XCTAssertNotNil(ProviderDefinition.catalog[.custom])
+    }
+
+    func testOpenAIProvider() {
+        let def = ProviderDefinition.catalog[.openai]!
+        XCTAssertEqual(def.endpoint, "https://api.openai.com/v1/audio/transcriptions")
+        XCTAssertTrue(def.models.contains("whisper-1"))
+        XCTAssertEqual(def.apiFormat, .whisperMultipart)
+    }
+
+    func testGLMProvider() {
+        let def = ProviderDefinition.catalog[.glm]!
+        XCTAssertTrue(def.endpoint.contains("bigmodel.cn"))
+        XCTAssertTrue(def.models.contains("glm-asr-2512"))
+        XCTAssertEqual(def.apiFormat, .whisperMultipart)
+    }
+
+    func testAlibabaProvider() {
+        let def = ProviderDefinition.catalog[.alibaba]!
+        XCTAssertTrue(def.endpoint.contains("dashscope"))
+        XCTAssertTrue(def.models.contains("qwen3-asr-flash"))
+        XCTAssertEqual(def.apiFormat, .chatCompletionsAudio)
+    }
+
+    // MARK: - HotkeyPreset
+
+    func testHotkeyPresetFromRawValue() {
+        XCTAssertEqual(HotkeyPreset.from(rawValue: "Right Option"), .rightOption)
+        XCTAssertEqual(HotkeyPreset.from(rawValue: "Right Command"), .rightCommand)
+        XCTAssertEqual(HotkeyPreset.from(rawValue: "Option Key"), .optionKey)
+        XCTAssertEqual(HotkeyPreset.from(rawValue: "invalid"), .rightOption) // fallback
+    }
+
+    func testHotkeyPresetKeycodes() {
+        XCTAssertNil(HotkeyPreset.optionKey.specificKeycode)
+        XCTAssertEqual(HotkeyPreset.rightOption.specificKeycode, 0x3D)
+        XCTAssertEqual(HotkeyPreset.rightCommand.specificKeycode, 0x36)
+    }
+}

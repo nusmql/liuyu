@@ -28,6 +28,7 @@ public final class TranscriptionService: Sendable {
     public let endpoint: String
     public let model: String
     public let language: String?
+    public let apiFormat: ApiFormat
     private let session: URLSession
 
     public init(
@@ -35,12 +36,14 @@ public final class TranscriptionService: Sendable {
         endpoint: String = "https://api.openai.com/v1/audio/transcriptions",
         model: String = "whisper-1",
         language: String? = nil,
+        apiFormat: ApiFormat = .whisperMultipart,
         session: URLSession? = nil
     ) {
         self.apiKey = apiKey
         self.endpoint = endpoint
         self.model = model
         self.language = language
+        self.apiFormat = apiFormat
         self.session = session ?? {
             let config = URLSessionConfiguration.default
             config.timeoutIntervalForRequest = 30
@@ -49,12 +52,13 @@ public final class TranscriptionService: Sendable {
     }
 
     public func transcribe(audioFileURL: URL, retryCount: Int = 0) async throws -> String {
-        let boundary = UUID().uuidString
-        var request = URLRequest(url: URL(string: endpoint)!)
-        request.httpMethod = "POST"
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try buildMultipartBody(fileURL: audioFileURL, boundary: boundary)
+        let request: URLRequest
+        switch apiFormat {
+        case .whisperMultipart:
+            request = try buildWhisperRequest(audioFileURL: audioFileURL)
+        case .chatCompletionsAudio:
+            request = try buildChatCompletionsRequest(audioFileURL: audioFileURL)
+        }
 
         let data: Data
         let response: URLResponse
@@ -73,7 +77,12 @@ public final class TranscriptionService: Sendable {
 
         switch httpResponse.statusCode {
         case 200:
-            return try parseResponse(data)
+            switch apiFormat {
+            case .whisperMultipart:
+                return try parseWhisperResponse(data)
+            case .chatCompletionsAudio:
+                return try parseChatCompletionsResponse(data)
+            }
         case 401:
             throw TranscriptionError.apiKeyInvalid
         case 429:
@@ -86,6 +95,18 @@ public final class TranscriptionService: Sendable {
             let message = parseErrorMessage(data) ?? "Unknown error"
             throw TranscriptionError.serverError(httpResponse.statusCode, message)
         }
+    }
+
+    // MARK: - Whisper Multipart Format (OpenAI, Groq, GLM)
+
+    private func buildWhisperRequest(audioFileURL: URL) throws -> URLRequest {
+        let boundary = UUID().uuidString
+        var request = URLRequest(url: URL(string: endpoint)!)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try buildMultipartBody(fileURL: audioFileURL, boundary: boundary)
+        return request
     }
 
     private func buildMultipartBody(fileURL: URL, boundary: String) throws -> Data {
@@ -105,7 +126,7 @@ public final class TranscriptionService: Sendable {
         return body
     }
 
-    private func parseResponse(_ data: Data) throws -> String {
+    private func parseWhisperResponse(_ data: Data) throws -> String {
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let text = json["text"] as? String else {
             throw TranscriptionError.decodingFailed
@@ -115,6 +136,55 @@ public final class TranscriptionService: Sendable {
         }
         return text
     }
+
+    // MARK: - Chat Completions Audio Format (Alibaba Qwen ASR)
+
+    private func buildChatCompletionsRequest(audioFileURL: URL) throws -> URLRequest {
+        let audioData = try Data(contentsOf: audioFileURL)
+        let base64Audio = audioData.base64EncodedString()
+
+        let body: [String: Any] = [
+            "model": model,
+            "messages": [
+                [
+                    "role": "user",
+                    "content": [
+                        [
+                            "type": "input_audio",
+                            "input_audio": [
+                                "data": base64Audio,
+                                "format": "m4a"
+                            ]
+                        ]
+                    ]
+                ]
+            ]
+        ]
+
+        var request = URLRequest(url: URL(string: endpoint)!)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        return request
+    }
+
+    private func parseChatCompletionsResponse(_ data: Data) throws -> String {
+        // Response format: { "choices": [{ "message": { "content": "transcribed text" } }] }
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let choices = json["choices"] as? [[String: Any]],
+              let first = choices.first,
+              let message = first["message"] as? [String: Any],
+              let content = message["content"] as? String else {
+            throw TranscriptionError.decodingFailed
+        }
+        if content.isEmpty {
+            throw TranscriptionError.noSpeechDetected
+        }
+        return content
+    }
+
+    // MARK: - Error Parsing
 
     private func parseErrorMessage(_ data: Data) -> String? {
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],

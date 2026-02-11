@@ -16,21 +16,23 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     private var currentAudioFileURL: URL?
     private var accessibilityPollTimer: Timer?
 
-    private let keychain = KeychainHelper()
+    private let configStore = ModelConfigStore()
     private let minimumRecordingDuration: TimeInterval = 0.3
 
     public override init() { super.init() }
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
+        configStore.migrateIfNeeded()
         RecordingController.cleanupOrphanedFiles()
         setupStatusItem()
         panelController.setup()
         setupHotkeySubscription()
         setupPanelActions()
+        applyHotkeyPreset()
         startHotkeyManager()
 
-        // First launch: open settings if no API key
-        if (try? keychain.read(key: "openai-api-key")) == nil {
+        // First launch: open settings if no active model configured
+        if configStore.activeConfig() == nil {
             settingsController.show()
         }
     }
@@ -60,9 +62,16 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Hotkey
 
+    private func applyHotkeyPreset() {
+        let presetRaw = UserDefaults.standard.string(forKey: "hotkeyPreset") ?? HotkeyPreset.rightOption.rawValue
+        hotkeyManager.preset = HotkeyPreset.from(rawValue: presetRaw)
+    }
+
     private func startHotkeyManager() {
         guard HotkeyManager.isAccessibilityGranted else {
-            HotkeyManager.requestAccessibilityPermission()
+            // Don't show the system prompt — poll silently instead.
+            // The user may have already granted permission for a different binary path.
+            HotkeyManager.requestAccessibilityPermission(prompt: false)
             accessibilityPollTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
                 MainActor.assumeIsolated {
                     if HotkeyManager.isAccessibilityGranted {
@@ -145,21 +154,28 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func transcribe(audioURL: URL) async {
-        guard let apiKey = try? keychain.read(key: "openai-api-key"), !apiKey.isEmpty else {
-            panelController.viewModel.showResult("No API key configured. Open Settings to add one.")
+        guard let config = configStore.activeConfig() else {
+            panelController.viewModel.showResult("No model configured. Open Settings to add one.")
             panelController.resize(width: 400, height: 120)
             settingsController.show()
             return
         }
 
-        let endpoint = UserDefaults.standard.string(forKey: "endpoint")
-            ?? "https://api.openai.com/v1/audio/transcriptions"
+        guard let apiKey = configStore.apiKey(for: config), !apiKey.isEmpty else {
+            panelController.viewModel.showResult("No API key for \(config.provider.rawValue). Open Settings.")
+            panelController.resize(width: 400, height: 120)
+            settingsController.show()
+            return
+        }
+
         let language = UserDefaults.standard.string(forKey: "language") ?? "auto"
 
         let service = TranscriptionService(
             apiKey: apiKey,
-            endpoint: endpoint,
-            language: language == "auto" ? nil : language
+            endpoint: config.endpoint,
+            model: config.modelId,
+            language: language == "auto" ? nil : language,
+            apiFormat: config.apiFormat
         )
 
         do {

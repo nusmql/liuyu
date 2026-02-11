@@ -9,6 +9,32 @@ public enum HotkeyEvent {
     case keyUp
 }
 
+public enum HotkeyPreset: String, CaseIterable, Sendable {
+    case optionKey = "Option Key"
+    case rightOption = "Right Option"
+    case rightCommand = "Right Command"
+
+    public var modifierFlag: CGEventFlags {
+        switch self {
+        case .optionKey, .rightOption: return .maskAlternate
+        case .rightCommand: return .maskCommand
+        }
+    }
+
+    /// If set, only this specific keycode triggers the hotkey (for left/right distinction).
+    public var specificKeycode: Int64? {
+        switch self {
+        case .optionKey: return nil
+        case .rightOption: return 0x3D   // Right Option
+        case .rightCommand: return 0x36  // Right Command
+        }
+    }
+
+    public static func from(rawValue: String) -> HotkeyPreset {
+        HotkeyPreset(rawValue: rawValue) ?? .rightOption
+    }
+}
+
 public class HotkeyManager {
     public let events = PassthroughSubject<HotkeyEvent, Never>()
 
@@ -16,8 +42,7 @@ public class HotkeyManager {
     private var runLoopSource: CFRunLoopSource?
     private var isKeyDown = false
 
-    /// The modifier flag to listen for. Default: right Option key.
-    public var modifierFlag: CGEventFlags = .maskAlternate
+    public var preset: HotkeyPreset = .rightOption
 
     public init() {}
 
@@ -26,18 +51,17 @@ public class HotkeyManager {
         AXIsProcessTrusted()
     }
 
-    /// Prompt user for accessibility permission. Returns true if already granted.
+    /// Prompt user for accessibility permission (shows system dialog). Returns true if already granted.
     @discardableResult
-    public static func requestAccessibilityPermission() -> Bool {
+    public static func requestAccessibilityPermission(prompt: Bool = true) -> Bool {
         // Use the string literal directly to avoid Swift 6 concurrency error
         // with the global `kAXTrustedCheckOptionPrompt` variable.
-        let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
+        let options = ["AXTrustedCheckOptionPrompt": prompt] as CFDictionary
         return AXIsProcessTrustedWithOptions(options)
     }
 
     public func start() throws {
         guard Self.isAccessibilityGranted else {
-            Self.requestAccessibilityPermission()
             throw HotkeyError.accessibilityNotGranted
         }
 
@@ -80,12 +104,16 @@ public class HotkeyManager {
 
     private func handleEvent(_ event: CGEvent) -> Unmanaged<CGEvent>? {
         let flags = event.flags
+        let keycode = event.getIntegerValueField(.keyboardEventKeycode)
 
-        if flags.contains(modifierFlag) && !isKeyDown {
+        let flagMatch = flags.contains(preset.modifierFlag)
+        let keycodeMatch = preset.specificKeycode.map { $0 == keycode } ?? true
+
+        if flagMatch && keycodeMatch && !isKeyDown {
             isKeyDown = true
             events.send(.keyDown)
             return nil // suppress the event
-        } else if !flags.contains(modifierFlag) && isKeyDown {
+        } else if !flags.contains(preset.modifierFlag) && isKeyDown {
             isKeyDown = false
             events.send(.keyUp)
             return nil // suppress the event
