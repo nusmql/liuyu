@@ -2,8 +2,8 @@ import SwiftUI
 import AVFoundation
 
 struct GeneralSettingsView: View {
-    @State private var accessibilityGranted = HotkeyManager.isAccessibilityGranted
-    @State private var microphoneGranted = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+    @State private var accessibilityGranted = false
+    @State private var microphoneGranted = false
 
     var body: some View {
         Form {
@@ -15,7 +15,9 @@ struct GeneralSettingsView: View {
                     Spacer()
                     if !accessibilityGranted {
                         Button("Grant") {
-                            HotkeyManager.requestAccessibilityPermission()
+                            NSWorkspace.shared.open(
+                                URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!
+                            )
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
@@ -35,9 +37,9 @@ struct GeneralSettingsView: View {
                     Spacer()
                     if !microphoneGranted {
                         Button("Grant") {
-                            Task {
-                                microphoneGranted = await RecordingController.requestMicrophonePermission()
-                            }
+                            NSWorkspace.shared.open(
+                                URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")!
+                            )
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
@@ -52,9 +54,14 @@ struct GeneralSettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .onAppear {
-            accessibilityGranted = HotkeyManager.isAccessibilityGranted
-            microphoneGranted = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+        .onAppear { refreshPermissions() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            refreshPermissions()
         }
+    }
+
+    private func refreshPermissions() {
+        accessibilityGranted = AXIsProcessTrusted()
+        microphoneGranted = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
     }
 }

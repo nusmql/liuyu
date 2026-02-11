@@ -53,7 +53,15 @@ struct SettingsView: View {
                     AboutSettingsView()
                 }
             }
-            .navigationTitle(selectedSection.rawValue)
+            .toolbar(.hidden)
+        }
+        .onChange(of: selectedSection) { newValue in
+            NSApp.keyWindow?.title = newValue.rawValue
+        }
+        .onAppear {
+            DispatchQueue.main.async {
+                NSApp.keyWindow?.title = selectedSection.rawValue
+            }
         }
     }
 }

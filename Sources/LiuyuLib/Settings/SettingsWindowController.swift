@@ -16,12 +16,12 @@ public class SettingsWindowController: NSObject, NSWindowDelegate {
 
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 650, height: 500),
-            styleMask: [.titled, .closable, .resizable],
+            styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
         )
-        window.title = ""
-        window.minSize = NSSize(width: 600, height: 400)
+        window.title = "General"
+        window.minSize = NSSize(width: 650, height: 500)
         window.center()
         window.contentView = NSHostingView(rootView: SettingsView())
         window.isReleasedWhenClosed = false
@@ -38,5 +38,9 @@ public class SettingsWindowController: NSObject, NSWindowDelegate {
     public func windowWillClose(_ notification: Notification) {
         // Return to menu bar-only mode when settings closes
         NSApp.setActivationPolicy(.accessory)
+    }
+
+    public func windowShouldZoom(_ window: NSWindow, toFrame newFrame: NSRect) -> Bool {
+        false
     }
 }
