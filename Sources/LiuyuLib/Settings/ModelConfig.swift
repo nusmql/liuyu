@@ -178,3 +178,48 @@ public final class ModelConfigStore: Sendable {
         try? keychain.save(key: config.keychainKey, value: existingKey)
     }
 }
+
+// MARK: - New Provider-Level Configuration
+
+public struct ProviderConfig: Codable, Identifiable, Equatable, Sendable {
+    public var id: UUID
+    public var provider: ProviderType
+    public var baseURL: String?  // optional override of catalog default
+
+    public var keychainKey: String { "provider-\(id.uuidString)" }
+
+    public init(id: UUID = UUID(), provider: ProviderType, baseURL: String? = nil) {
+        self.id = id
+        self.provider = provider
+        self.baseURL = baseURL
+    }
+}
+
+public struct ModelAssignment: Codable, Equatable, Sendable {
+    public var providerID: UUID
+    public var modelId: String
+
+    public init(providerID: UUID, modelId: String) {
+        self.providerID = providerID
+        self.modelId = modelId
+    }
+}
+
+public struct FeatureConfig: Codable, Equatable, Sendable {
+    public var sttPrimary: ModelAssignment?
+    public var sttFallback: ModelAssignment?
+    public var llmPrimary: ModelAssignment?
+    public var llmFallback: ModelAssignment?
+
+    public init(
+        sttPrimary: ModelAssignment? = nil,
+        sttFallback: ModelAssignment? = nil,
+        llmPrimary: ModelAssignment? = nil,
+        llmFallback: ModelAssignment? = nil
+    ) {
+        self.sttPrimary = sttPrimary
+        self.sttFallback = sttFallback
+        self.llmPrimary = llmPrimary
+        self.llmFallback = llmFallback
+    }
+}
