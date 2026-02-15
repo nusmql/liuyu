@@ -25,22 +25,28 @@ struct EditView: View {
 
     @ViewBuilder
     private var contentArea: some View {
-        VStack(spacing: 16) {
-            if viewModel.hasText {
+        if viewModel.hasText {
+            // Has text: TextEditor fills available space, mic area fixed at bottom
+            VStack(spacing: 0) {
                 TextEditor(text: $viewModel.text)
                     .font(.system(size: 14))
                     .scrollContentBackground(.hidden)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding(.horizontal, 20)
+                    .padding(.top, 20)
+
+                micArea
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 12)
             }
-
-            micArea
-                .frame(maxWidth: .infinity)
-
-            if !viewModel.hasText {
+        } else {
+            // Empty: mic area centered vertically
+            VStack {
+                Spacer()
+                micArea
                 Spacer()
             }
+            .padding(20)
         }
-        .padding(20)
     }
 
     @ViewBuilder
