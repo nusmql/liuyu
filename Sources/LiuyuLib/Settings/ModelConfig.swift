@@ -27,6 +27,7 @@ public struct ProviderDefinition: Sendable {
     public let sttModels: [String]
     public let llmModels: [String]
     public let sttApiFormat: ApiFormat
+    public let apiKeyURL: String?
 
     // Backward-compat computed properties
     public var endpoint: String { sttEndpoint }
@@ -40,7 +41,8 @@ public struct ProviderDefinition: Sendable {
             llmEndpoint: "https://api.openai.com/v1/chat/completions",
             sttModels: ["whisper-1"],
             llmModels: ["gpt-4o-mini", "gpt-4o"],
-            sttApiFormat: .whisperMultipart
+            sttApiFormat: .whisperMultipart,
+            apiKeyURL: "https://platform.openai.com/api-keys"
         ),
         .groq: ProviderDefinition(
             type: .groq,
@@ -52,7 +54,8 @@ public struct ProviderDefinition: Sendable {
                 "distil-whisper-large-v3-en"
             ],
             llmModels: ["llama-3.3-70b-versatile"],
-            sttApiFormat: .whisperMultipart
+            sttApiFormat: .whisperMultipart,
+            apiKeyURL: "https://console.groq.com/keys"
         ),
         .glm: ProviderDefinition(
             type: .glm,
@@ -60,7 +63,8 @@ public struct ProviderDefinition: Sendable {
             llmEndpoint: "https://open.bigmodel.cn/api/paas/v4/chat/completions",
             sttModels: ["glm-asr-2512"],
             llmModels: ["glm-4-flash"],
-            sttApiFormat: .whisperMultipart
+            sttApiFormat: .whisperMultipart,
+            apiKeyURL: "https://open.bigmodel.cn/usercenter/apikeys"
         ),
         .alibaba: ProviderDefinition(
             type: .alibaba,
@@ -68,7 +72,8 @@ public struct ProviderDefinition: Sendable {
             llmEndpoint: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
             sttModels: ["qwen3-asr-flash"],
             llmModels: ["qwen-turbo"],
-            sttApiFormat: .chatCompletionsAudio
+            sttApiFormat: .chatCompletionsAudio,
+            apiKeyURL: "https://dashscope.console.aliyun.com/apiKey"
         ),
         .custom: ProviderDefinition(
             type: .custom,
@@ -76,7 +81,8 @@ public struct ProviderDefinition: Sendable {
             llmEndpoint: "",
             sttModels: [],
             llmModels: [],
-            sttApiFormat: .whisperMultipart
+            sttApiFormat: .whisperMultipart,
+            apiKeyURL: nil
         )
     ]
 }
