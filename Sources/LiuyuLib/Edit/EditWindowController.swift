@@ -21,13 +21,13 @@ class EditWindowController: NSObject, NSWindowDelegate {
         }
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 500, height: 400),
+            contentRect: NSRect(x: 0, y: 0, width: 500, height: 200),
             styleMask: [.titled, .closable, .resizable],
             backing: .buffered,
             defer: false
         )
-        window.title = "Liuyu Edit"
-        window.minSize = NSSize(width: 400, height: 300)
+        window.title = "LiuYu"
+        window.minSize = NSSize(width: 400, height: 150)
         window.center()
         window.contentView = NSHostingView(
             rootView: EditView(onClose: { [weak self] in self?.close() })

@@ -23,6 +23,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     public override init() { super.init() }
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
+        AppTheme.applyFromDefaults()
         providerStore.migrateIfNeeded()
         RecordingController.cleanupOrphanedFiles()
         setupStatusItem()
@@ -60,7 +61,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let menu = NSMenu()
-        menu.addItem(NSMenuItem(title: "Edit...", action: #selector(openEdit), keyEquivalent: "e"))
+        menu.addItem(NSMenuItem(title: "Open...", action: #selector(openEdit), keyEquivalent: "o"))
         menu.addItem(NSMenuItem(title: "Settings...", action: #selector(openSettings), keyEquivalent: ","))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit Liuyu", action: #selector(quitApp), keyEquivalent: "q"))

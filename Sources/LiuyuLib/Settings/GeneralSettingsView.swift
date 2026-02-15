@@ -5,11 +5,24 @@ import Combine
 struct GeneralSettingsView: View {
     @State private var accessibilityGranted = false
     @State private var microphoneGranted = false
+    @AppStorage("appTheme") private var appTheme: String = "system"
 
     private let timer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
     var body: some View {
         Form {
+            Section("Appearance") {
+                Picker("Theme", selection: $appTheme) {
+                    Text("System").tag("system")
+                    Text("Light").tag("light")
+                    Text("Dark").tag("dark")
+                }
+                .pickerStyle(.segmented)
+                .onChange(of: appTheme) { _ in
+                    AppTheme.apply(appTheme)
+                }
+            }
+
             Section("Permissions") {
                 HStack {
                     Image(systemName: accessibilityGranted ? "checkmark.circle.fill" : "xmark.circle.fill")

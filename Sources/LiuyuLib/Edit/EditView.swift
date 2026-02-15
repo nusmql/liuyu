@@ -118,18 +118,25 @@ struct EditView: View {
     }
 
     private var micButtonContent: some View {
-        Image(nsImage: Lucide.mic)
-            .resizable()
-            .frame(width: 24, height: 24)
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 20)
-            .overlay {
-                Text(viewModel.micButtonLabel)
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .offset(y: 28)
-            }
+        VStack(spacing: 12) {
+            Text(viewModel.micButtonLabel)
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+
+            Image(nsImage: {
+                    let img = Lucide.mic.copy() as! NSImage
+                    img.isTemplate = true
+                    return img
+                }())
+                .resizable()
+                .frame(width: 28, height: 28)
+                .foregroundStyle(.white)
+                .padding(.horizontal, 48)
+                .padding(.vertical, 14)
+                .background(Capsule().fill(Color(nsColor: .darkGray)))
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 8)
     }
 
     private var waveformView: some View {
@@ -148,7 +155,7 @@ struct EditView: View {
     // MARK: - Action Bar
 
     private var actionBar: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 10) {
             Spacer()
 
             Button(action: { viewModel.clear() }) {
@@ -157,9 +164,9 @@ struct EditView: View {
                 } icon: {
                     Image(nsImage: Lucide.trash2)
                         .resizable()
-                        .frame(width: 12, height: 12)
+                        .frame(width: 16, height: 16)
                 }
-                .font(.system(size: 12))
+                .font(.system(size: 16))
                 .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
@@ -171,9 +178,9 @@ struct EditView: View {
                 } icon: {
                     Image(nsImage: Lucide.clipboardCopy)
                         .resizable()
-                        .frame(width: 12, height: 12)
+                        .frame(width: 16, height: 16)
                 }
-                .font(.system(size: 12))
+                .font(.system(size: 16))
                 .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
@@ -188,12 +195,12 @@ struct EditView: View {
                 } icon: {
                     Image(nsImage: Lucide.cornerDownLeft)
                         .resizable()
-                        .frame(width: 12, height: 12)
+                        .frame(width: 16, height: 16)
                 }
-                .font(.system(size: 12))
+                .font(.system(size: 16))
             }
             .buttonStyle(.borderedProminent)
-            .controlSize(.small)
+            .controlSize(.regular)
             .disabled(!viewModel.hasText)
         }
     }

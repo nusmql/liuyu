@@ -63,13 +63,15 @@ public class RecordingController: ObservableObject {
             throw RecordingError.fileCreationFailed(error)
         }
 
-        // Install tap for audio data and metering
-        let outputFormat = AVAudioFormat(settings: outputSettings)!
-        let converter = AVAudioConverter(from: inputFormat, to: outputFormat)
-
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: inputFormat) { [weak self] buffer, _ in
-            self?.processBuffer(buffer, converter: converter, audioFile: audioFile)
-        }
+        // Install tap for audio data and metering.
+        // The converter resamples to 16 kHz mono PCM; AVAudioFile handles AAC encoding.
+        // Delegate to a free function so the closure is NOT @MainActor-isolated
+        // (non-Sendable captures from @MainActor methods inherit actor isolation,
+        // which crashes when AVAudioEngine calls the tap from its render thread).
+        let pcmFormat = AVAudioFormat(standardFormatWithSampleRate: 16000, channels: 1)!
+        let converter = AVAudioConverter(from: inputFormat, to: pcmFormat)
+        _installAudioTap(on: inputNode, format: inputFormat,
+                         converter: converter, audioFile: audioFile, controller: self)
 
         do {
             try engine.start()
@@ -110,9 +112,9 @@ public class RecordingController: ObservableObject {
         try? FileManager.default.removeItem(at: url)
     }
 
-    private nonisolated func processBuffer(_ buffer: AVAudioPCMBuffer,
-                                            converter: AVAudioConverter?,
-                                            audioFile: AVAudioFile) {
+    fileprivate nonisolated func processBuffer(_ buffer: AVAudioPCMBuffer,
+                                               converter: AVAudioConverter?,
+                                               audioFile: AVAudioFile) {
         // Calculate RMS audio level
         guard let channelData = buffer.floatChannelData?[0] else { return }
         let frameCount = Int(buffer.frameLength)
@@ -159,5 +161,20 @@ public class RecordingController: ObservableObject {
                 try? audioFile.write(from: convertedBuffer)
             }
         }
+    }
+}
+
+// Free function — no @MainActor context, so the closure is non-isolated
+// and safe to call from AVAudioEngine's render thread.
+private func _installAudioTap(
+    on inputNode: AVAudioInputNode,
+    format: AVAudioFormat,
+    converter: AVAudioConverter?,
+    audioFile: AVAudioFile,
+    controller: RecordingController
+) {
+    weak let weakController = controller
+    inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
+        weakController?.processBuffer(buffer, converter: converter, audioFile: audioFile)
     }
 }

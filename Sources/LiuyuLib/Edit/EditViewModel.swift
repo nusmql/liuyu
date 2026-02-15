@@ -28,7 +28,7 @@ public class EditViewModel: ObservableObject {
     public var hasText: Bool { !text.isEmpty }
 
     public var micButtonLabel: String {
-        hasText ? "Hold to Edit" : "Hold to Record"
+        hasText ? "Click to Edit" : "Click to Speak"
     }
 
     public var audioLevel: Float {
