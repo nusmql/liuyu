@@ -2,7 +2,7 @@ import SwiftUI
 
 enum SettingsSection: String, CaseIterable, Identifiable {
     case general = "General"
-    case models = "Models"
+    case providers = "Providers"
     case transcription = "Transcription"
     case hotkey = "Hotkey"
     case about = "About"
@@ -12,7 +12,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .general: return "gear"
-        case .models: return "cpu"
+        case .providers: return "server.rack"
         case .transcription: return "text.bubble"
         case .hotkey: return "keyboard"
         case .about: return "info.circle"
@@ -43,8 +43,8 @@ struct SettingsView: View {
                 switch selectedSection {
                 case .general:
                     GeneralSettingsView()
-                case .models:
-                    ModelsSettingsView()
+                case .providers:
+                    ProvidersSettingsView()
                 case .transcription:
                     TranscriptionSettingsView()
                 case .hotkey:
