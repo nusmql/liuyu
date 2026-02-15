@@ -196,6 +196,126 @@ public final class ModelConfigStore: Sendable {
     }
 }
 
+// MARK: - New Provider-Level Storage
+
+public final class ProviderConfigStore: Sendable {
+    private static let providersKey = "providerConfigs"
+    private static let featureKey = "featureConfig"
+    private static let migrationDoneKey = "providerMigrationDone"
+    private let keychain = KeychainHelper()
+
+    public init() {}
+
+    // MARK: - Providers
+
+    public func loadProviders() -> [ProviderConfig] {
+        guard let data = UserDefaults.standard.data(forKey: Self.providersKey),
+              let configs = try? JSONDecoder().decode([ProviderConfig].self, from: data) else {
+            return []
+        }
+        return configs
+    }
+
+    public func saveProviders(_ configs: [ProviderConfig]) {
+        if let data = try? JSONEncoder().encode(configs) {
+            UserDefaults.standard.set(data, forKey: Self.providersKey)
+        }
+    }
+
+    public func apiKey(for provider: ProviderConfig) -> String? {
+        try? keychain.read(key: provider.keychainKey)
+    }
+
+    public func saveApiKey(_ key: String, for provider: ProviderConfig) throws {
+        try keychain.save(key: provider.keychainKey, value: key)
+    }
+
+    public func deleteApiKey(for provider: ProviderConfig) throws {
+        try keychain.delete(key: provider.keychainKey)
+    }
+
+    // MARK: - Feature Config
+
+    public func loadFeatureConfig() -> FeatureConfig {
+        guard let data = UserDefaults.standard.data(forKey: Self.featureKey),
+              let config = try? JSONDecoder().decode(FeatureConfig.self, from: data) else {
+            return FeatureConfig()
+        }
+        return config
+    }
+
+    public func saveFeatureConfig(_ config: FeatureConfig) {
+        if let data = try? JSONEncoder().encode(config) {
+            UserDefaults.standard.set(data, forKey: Self.featureKey)
+        }
+    }
+
+    // MARK: - Resolution
+
+    public func provider(for assignment: ModelAssignment) -> ProviderConfig? {
+        loadProviders().first(where: { $0.id == assignment.providerID })
+    }
+
+    /// Resolve STT params: (apiKey, endpoint, modelId, apiFormat).
+    public func resolveSTT(_ assignment: ModelAssignment) -> (apiKey: String, endpoint: String, model: String, apiFormat: ApiFormat)? {
+        guard let pc = provider(for: assignment),
+              let key = apiKey(for: pc), !key.isEmpty else { return nil }
+        let def = ProviderDefinition.catalog[pc.provider]
+        let endpoint = pc.baseURL ?? def?.sttEndpoint ?? ""
+        let format = def?.sttApiFormat ?? .whisperMultipart
+        return (key, endpoint, assignment.modelId, format)
+    }
+
+    /// Resolve LLM params: (apiKey, endpoint, modelId).
+    public func resolveLLM(_ assignment: ModelAssignment) -> (apiKey: String, endpoint: String, model: String)? {
+        guard let pc = provider(for: assignment),
+              let key = apiKey(for: pc), !key.isEmpty else { return nil }
+        let def = ProviderDefinition.catalog[pc.provider]
+        let endpoint = pc.baseURL ?? def?.llmEndpoint ?? ""
+        return (key, endpoint, assignment.modelId)
+    }
+
+    // MARK: - Migration
+
+    public func migrateIfNeeded() {
+        guard !UserDefaults.standard.bool(forKey: Self.migrationDoneKey) else { return }
+
+        let oldStore = ModelConfigStore()
+        let oldConfigs = oldStore.loadConfigs()
+        guard !oldConfigs.isEmpty else {
+            UserDefaults.standard.set(true, forKey: Self.migrationDoneKey)
+            return
+        }
+
+        var providerMap: [ProviderType: ProviderConfig] = [:]
+        var providers: [ProviderConfig] = []
+
+        for old in oldConfigs {
+            if providerMap[old.provider] == nil {
+                let pc = ProviderConfig(provider: old.provider)
+                providerMap[old.provider] = pc
+                providers.append(pc)
+
+                if let key = oldStore.apiKey(for: old), !key.isEmpty {
+                    try? saveApiKey(key, for: pc)
+                }
+            }
+        }
+
+        saveProviders(providers)
+
+        if let active = oldConfigs.first(where: { $0.isActive }),
+           let pc = providerMap[active.provider] {
+            let feature = FeatureConfig(
+                sttPrimary: ModelAssignment(providerID: pc.id, modelId: active.modelId)
+            )
+            saveFeatureConfig(feature)
+        }
+
+        UserDefaults.standard.set(true, forKey: Self.migrationDoneKey)
+    }
+}
+
 // MARK: - New Provider-Level Configuration
 
 public struct ProviderConfig: Codable, Identifiable, Equatable, Sendable {
