@@ -149,8 +149,9 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
         if elapsed < minimumRecordingDuration {
             let remaining = minimumRecordingDuration - elapsed
-            DispatchQueue.main.asyncAfter(deadline: .now() + remaining) { [weak self] in
-                self?.stopRecordingAndTranscribe()
+            Task {
+                try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
+                self.stopRecordingAndTranscribe()
             }
         } else {
             stopRecordingAndTranscribe()
@@ -246,8 +247,9 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
         previousApp?.activate()
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-            self?.simulatePaste()
+        Task {
+            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
+            self.simulatePaste()
         }
     }
 

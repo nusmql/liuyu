@@ -127,7 +127,7 @@ public class RecordingController: ObservableObject {
         let db = 20 * log10(max(rms, 1e-6))
         let normalized = max(0, min(1, (db + 50) / 50))
 
-        DispatchQueue.main.async { [weak self] in
+        Task { @MainActor [weak self] in
             self?.audioLevel = normalized
         }
 
