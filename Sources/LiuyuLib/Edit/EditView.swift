@@ -6,6 +6,7 @@ struct EditView: View {
     @StateObject private var viewModel = EditViewModel()
     @State private var waveformLevels: [Float] = Array(repeating: 0, count: 7)
 
+    let onInsert: (String) -> Void
     let onClose: () -> Void
 
     var body: some View {
@@ -187,7 +188,7 @@ struct EditView: View {
             .disabled(!viewModel.hasText)
 
             Button(action: {
-                viewModel.insert()
+                onInsert(viewModel.text)
                 onClose()
             }) {
                 Label {

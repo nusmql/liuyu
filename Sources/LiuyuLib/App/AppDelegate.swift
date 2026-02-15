@@ -26,6 +26,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         AppTheme.applyFromDefaults()
         providerStore.migrateIfNeeded()
         RecordingController.cleanupOrphanedFiles()
+        setupMainMenu()
         setupStatusItem()
         panelController.setup()
         setupHotkeySubscription()
@@ -50,6 +51,34 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         if !settingsController.isWindowVisible && !editController.isWindowVisible {
             NSApp.setActivationPolicy(.accessory)
         }
+    }
+
+    // MARK: - Main Menu (enables Cmd+C/V/X/A in text fields)
+
+    private func setupMainMenu() {
+        let mainMenu = NSMenu()
+
+        // App menu
+        let appMenuItem = NSMenuItem()
+        let appMenu = NSMenu()
+        appMenu.addItem(NSMenuItem(title: "Quit Liuyu", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        appMenuItem.submenu = appMenu
+        mainMenu.addItem(appMenuItem)
+
+        // Edit menu
+        let editMenuItem = NSMenuItem()
+        let editMenu = NSMenu(title: "Edit")
+        editMenu.addItem(NSMenuItem(title: "Undo", action: Selector(("undo:")), keyEquivalent: "z"))
+        editMenu.addItem(NSMenuItem(title: "Redo", action: Selector(("redo:")), keyEquivalent: "Z"))
+        editMenu.addItem(.separator())
+        editMenu.addItem(NSMenuItem(title: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x"))
+        editMenu.addItem(NSMenuItem(title: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c"))
+        editMenu.addItem(NSMenuItem(title: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v"))
+        editMenu.addItem(NSMenuItem(title: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a"))
+        editMenuItem.submenu = editMenu
+        mainMenu.addItem(editMenuItem)
+
+        NSApp.mainMenu = mainMenu
     }
 
     // MARK: - Status Item
@@ -185,25 +214,30 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         // Try primary, then fallback
-        if let text = await tryTranscribe(assignment: sttAssignment, audioURL: audioURL) {
-            panelController.viewModel.showResult(text)
+        let (primaryText, primaryError) = await tryTranscribe(assignment: sttAssignment, audioURL: audioURL)
+        if let primaryText {
+            panelController.viewModel.showResult(primaryText)
             panelController.resize(width: 400, height: 120)
             return
         }
 
-        if let fallback = feature.sttFallback,
-           let text = await tryTranscribe(assignment: fallback, audioURL: audioURL) {
-            panelController.viewModel.showResult(text)
-            panelController.resize(width: 400, height: 120)
-            return
+        if let fallback = feature.sttFallback {
+            let (fallbackText, _) = await tryTranscribe(assignment: fallback, audioURL: audioURL)
+            if let fallbackText {
+                panelController.viewModel.showResult(fallbackText)
+                panelController.resize(width: 400, height: 120)
+                return
+            }
         }
 
-        panelController.viewModel.showResult("Transcription failed. Check Settings.")
+        panelController.viewModel.showResult(primaryError ?? "Transcription failed. Check Settings.")
         panelController.resize(width: 400, height: 120)
     }
 
-    private func tryTranscribe(assignment: ModelAssignment, audioURL: URL) async -> String? {
-        guard let params = providerStore.resolveSTT(assignment) else { return nil }
+    private func tryTranscribe(assignment: ModelAssignment, audioURL: URL) async -> (String?, String?) {
+        guard let params = providerStore.resolveSTT(assignment) else {
+            return (nil, "Could not resolve provider. Check API key.")
+        }
 
         let language = UserDefaults.standard.string(forKey: "language") ?? "auto"
         let service = TranscriptionService(
@@ -214,7 +248,14 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             apiFormat: params.apiFormat
         )
 
-        return try? await service.transcribe(audioFileURL: audioURL)
+        do {
+            let text = try await service.transcribe(audioFileURL: audioURL)
+            return (text, nil)
+        } catch {
+            let detail = "[\(params.model)] \(error.localizedDescription)"
+            print("[Liuyu STT] \(detail) | endpoint=\(params.endpoint)")
+            return (nil, detail)
+        }
     }
 
     // MARK: - Panel Actions

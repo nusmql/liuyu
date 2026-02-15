@@ -1,6 +1,8 @@
 import Foundation
-import Security
 
+/// File-based key storage in ~/Library/Application Support/Liuyu/keys/.
+/// Avoids macOS Keychain issues with unsigned development builds (password
+/// prompts, code-signature mismatches, Data Protection entitlement requirements).
 public struct KeychainHelper: Sendable {
     public let service: String
 
@@ -8,68 +10,42 @@ public struct KeychainHelper: Sendable {
         self.service = service
     }
 
+    private var storageDir: URL {
+        let appSupport = FileManager.default.urls(
+            for: .applicationSupportDirectory, in: .userDomainMask
+        ).first!
+        let dir = appSupport
+            .appendingPathComponent("Liuyu")
+            .appendingPathComponent("keys")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true,
+                                                  attributes: [.posixPermissions: 0o700])
+        return dir
+    }
+
+    private func fileURL(for key: String) -> URL {
+        // Sanitize key for filesystem
+        let safe = key.replacingOccurrences(of: "/", with: "_")
+        return storageDir.appendingPathComponent(safe)
+    }
+
     public func save(key: String, value: String) throws {
-        guard let data = value.data(using: .utf8) else {
-            throw KeychainError.encodingFailed
-        }
-
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: key
-        ]
-
-        let attributes: [String: Any] = [
-            kSecValueData as String: data
-        ]
-
-        let updateStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
-
-        if updateStatus == errSecItemNotFound {
-            var addQuery = query
-            addQuery[kSecValueData as String] = data
-            let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
-            guard addStatus == errSecSuccess else {
-                throw KeychainError.saveFailed(addStatus)
-            }
-        } else if updateStatus != errSecSuccess {
-            throw KeychainError.saveFailed(updateStatus)
-        }
+        let url = fileURL(for: key)
+        try value.write(to: url, atomically: true, encoding: .utf8)
+        // Restrict to owner read/write only
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
     }
 
     public func read(key: String) throws -> String? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: key,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne
-        ]
-
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-
-        if status == errSecItemNotFound {
-            return nil
-        }
-
-        guard status == errSecSuccess, let data = result as? Data else {
-            throw KeychainError.readFailed(status)
-        }
-
-        return String(data: data, encoding: .utf8)
+        let url = fileURL(for: key)
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        let value = try String(contentsOf: url, encoding: .utf8)
+        return value.isEmpty ? nil : value
     }
 
     public func delete(key: String) throws {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: key
-        ]
-
-        let status = SecItemDelete(query as CFDictionary)
-        guard status == errSecSuccess || status == errSecItemNotFound else {
-            throw KeychainError.deleteFailed(status)
+        let url = fileURL(for: key)
+        if FileManager.default.fileExists(atPath: url.path) {
+            try FileManager.default.removeItem(at: url)
         }
     }
 }
@@ -83,9 +59,9 @@ public enum KeychainError: Error, LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .encodingFailed: return "Failed to encode value"
-        case .saveFailed(let s): return "Keychain save failed: \(s)"
-        case .readFailed(let s): return "Keychain read failed: \(s)"
-        case .deleteFailed(let s): return "Keychain delete failed: \(s)"
+        case .saveFailed(let s): return "Key storage save failed: \(s)"
+        case .readFailed(let s): return "Key storage read failed: \(s)"
+        case .deleteFailed(let s): return "Key storage delete failed: \(s)"
         }
     }
 }

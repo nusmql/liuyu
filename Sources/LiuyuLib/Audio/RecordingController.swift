@@ -7,7 +7,7 @@ import Combine
 public class RecordingController: ObservableObject {
     @Published public var audioLevel: Float = 0.0
 
-    private var engine: AVAudioEngine?
+    private lazy var engine = AVAudioEngine()
     private var audioFile: AVAudioFile?
     private var tempFileURL: URL?
 
@@ -41,19 +41,20 @@ public class RecordingController: ObservableObject {
 
     /// Start recording. Returns immediately. Call stop() to get the file URL.
     public func start() throws {
-        let engine = AVAudioEngine()
         let inputNode = engine.inputNode
         let inputFormat = inputNode.outputFormat(forBus: 0)
 
-        // Create temp file with settings for the Whisper API
+        // Create temp WAV file (16 kHz, mono, 16-bit PCM — universally supported by all STT APIs)
         let tempURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("liuyu_\(UUID().uuidString).m4a")
+            .appendingPathComponent("liuyu_\(UUID().uuidString).wav")
 
         let outputSettings: [String: Any] = [
-            AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
+            AVFormatIDKey: Int(kAudioFormatLinearPCM),
             AVSampleRateKey: 16000,
             AVNumberOfChannelsKey: 1,
-            AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
+            AVLinearPCMBitDepthKey: 16,
+            AVLinearPCMIsFloatKey: false,
+            AVLinearPCMIsBigEndianKey: false
         ]
 
         let audioFile: AVAudioFile
@@ -64,7 +65,7 @@ public class RecordingController: ObservableObject {
         }
 
         // Install tap for audio data and metering.
-        // The converter resamples to 16 kHz mono PCM; AVAudioFile handles AAC encoding.
+        // The converter resamples to 16 kHz mono PCM.
         // Delegate to a free function so the closure is NOT @MainActor-isolated
         // (non-Sendable captures from @MainActor methods inherit actor isolation,
         // which crashes when AVAudioEngine calls the tap from its render thread).
@@ -80,16 +81,23 @@ public class RecordingController: ObservableObject {
             throw RecordingError.engineStartFailed(error)
         }
 
-        self.engine = engine
         self.audioFile = audioFile
         self.tempFileURL = tempURL
     }
 
     /// Stop recording and return the temp file URL.
     public func stop() -> URL? {
-        engine?.inputNode.removeTap(onBus: 0)
-        engine?.stop()
-        engine = nil
+        engine.inputNode.removeTap(onBus: 0)
+        engine.stop()
+        engine.reset()  // Clear HAL state so next start() works cleanly
+
+        // Log file size for debugging
+        if let url = tempFileURL,
+           let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+           let size = attrs[.size] as? Int {
+            print("[Liuyu Audio] WAV file: \(size) bytes at \(url.lastPathComponent)")
+        }
+
         audioFile = nil
         audioLevel = 0.0
         return tempFileURL

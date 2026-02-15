@@ -258,8 +258,15 @@ public final class ProviderConfigStore: Sendable {
 
     /// Resolve STT params: (apiKey, endpoint, modelId, apiFormat).
     public func resolveSTT(_ assignment: ModelAssignment) -> (apiKey: String, endpoint: String, model: String, apiFormat: ApiFormat)? {
-        guard let pc = provider(for: assignment),
-              let key = apiKey(for: pc), !key.isEmpty else { return nil }
+        guard let pc = provider(for: assignment) else {
+            let providers = loadProviders()
+            print("[Liuyu Config] STT resolve failed: provider \(assignment.providerID) not found. Available: \(providers.map { "\($0.provider.rawValue)=\($0.id)" })")
+            return nil
+        }
+        guard let key = apiKey(for: pc), !key.isEmpty else {
+            print("[Liuyu Config] STT resolve failed: no API key for \(pc.provider.rawValue). Re-enter key in Settings.")
+            return nil
+        }
         let def = ProviderDefinition.catalog[pc.provider]
         let endpoint = pc.baseURL ?? def?.sttEndpoint ?? ""
         let format = def?.sttApiFormat ?? .whisperMultipart
@@ -268,8 +275,15 @@ public final class ProviderConfigStore: Sendable {
 
     /// Resolve LLM params: (apiKey, endpoint, modelId).
     public func resolveLLM(_ assignment: ModelAssignment) -> (apiKey: String, endpoint: String, model: String)? {
-        guard let pc = provider(for: assignment),
-              let key = apiKey(for: pc), !key.isEmpty else { return nil }
+        guard let pc = provider(for: assignment) else {
+            let providers = loadProviders()
+            print("[Liuyu Config] LLM resolve failed: provider \(assignment.providerID) not found. Available: \(providers.map { "\($0.provider.rawValue)=\($0.id)" })")
+            return nil
+        }
+        guard let key = apiKey(for: pc), !key.isEmpty else {
+            print("[Liuyu Config] LLM resolve failed: no API key for \(pc.provider.rawValue). Re-enter key in Settings.")
+            return nil
+        }
         let def = ProviderDefinition.catalog[pc.provider]
         let endpoint = pc.baseURL ?? def?.llmEndpoint ?? ""
         return (key, endpoint, assignment.modelId)

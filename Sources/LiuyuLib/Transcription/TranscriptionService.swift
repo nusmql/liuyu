@@ -114,8 +114,9 @@ public final class TranscriptionService: Sendable {
         let fileData = try Data(contentsOf: fileURL)
         let filename = fileURL.lastPathComponent
 
+        let contentType = filename.hasSuffix(".wav") ? "audio/wav" : "audio/m4a"
         body.appendMultipart(boundary: boundary, name: "file", filename: filename,
-                             contentType: "audio/m4a", data: fileData)
+                             contentType: contentType, data: fileData)
         body.appendMultipart(boundary: boundary, name: "model", value: model)
         if let language {
             body.appendMultipart(boundary: boundary, name: "language", value: language)

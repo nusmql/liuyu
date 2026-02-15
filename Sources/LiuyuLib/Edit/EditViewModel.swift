@@ -24,6 +24,7 @@ public class EditViewModel: ObservableObject {
     private var recordingFailed = false
 
     private let minimumRecordingDuration: TimeInterval = 0.3
+    private var e2eStartTime: Date?
 
     public var hasText: Bool { !text.isEmpty }
 
@@ -51,10 +52,12 @@ public class EditViewModel: ObservableObject {
     public func startRecording() {
         guard !recordingFailed else { return }
         errorMessage = nil
+        e2eStartTime = Date()
         do {
             try recordingController.start()
             recordingStartTime = Date()
             editState = .recording(audioLevel: 0)
+            print("[Liuyu Timing] Recording started")
         } catch {
             recordingFailed = true
             errorMessage = error.localizedDescription
@@ -84,6 +87,10 @@ public class EditViewModel: ObservableObject {
             editState = .idle
             return
         }
+
+        let recordingDuration = Date().timeIntervalSince(recordingStartTime ?? Date())
+        print("[Liuyu Timing] Recording stopped — duration: \(String(format: "%.2f", recordingDuration))s")
+
         currentAudioURL = audioURL
 
         if hasText {
@@ -103,18 +110,25 @@ public class EditViewModel: ObservableObject {
         let feature = providerStore.loadFeatureConfig()
 
         // Step 1: Transcribe the voice
+        let sttStart = Date()
         guard let transcribedText = await transcribe(audioURL: audioURL, feature: feature) else {
             editState = .idle
             return
         }
+        print("[Liuyu Timing] STT completed — \(String(format: "%.2f", Date().timeIntervalSince(sttStart)))s — \"\(transcribedText.prefix(80))\"")
 
         // Step 2: If there's existing text, send to LLM for editing
         if hasText {
+            let llmStart = Date()
             await editWithLLM(instruction: transcribedText, feature: feature)
+            print("[Liuyu Timing] LLM edit completed — \(String(format: "%.2f", Date().timeIntervalSince(llmStart)))s")
         } else {
             text = transcribedText
             editState = .idle
         }
+
+        let e2eTotal = Date().timeIntervalSince(e2eStartTime ?? Date())
+        print("[Liuyu Timing] End-to-end total: \(String(format: "%.2f", e2eTotal))s")
 
         cleanupAudio()
     }
@@ -125,21 +139,23 @@ public class EditViewModel: ObservableObject {
             return nil
         }
 
-        if let result = await tryTranscribe(assignment: stt, audioURL: audioURL) {
-            return result
-        }
+        let (result, error) = await tryTranscribe(assignment: stt, audioURL: audioURL)
+        if let result { return result }
 
-        if let fallback = feature.sttFallback,
-           let result = await tryTranscribe(assignment: fallback, audioURL: audioURL) {
-            return result
+        if let fallback = feature.sttFallback {
+            let (fallbackResult, fallbackError) = await tryTranscribe(assignment: fallback, audioURL: audioURL)
+            if let fallbackResult { return fallbackResult }
+            errorMessage = fallbackError ?? error ?? "Transcription failed."
+        } else {
+            errorMessage = error ?? "Transcription failed."
         }
-
-        errorMessage = "Transcription failed. Check Settings."
         return nil
     }
 
-    private func tryTranscribe(assignment: ModelAssignment, audioURL: URL) async -> String? {
-        guard let params = providerStore.resolveSTT(assignment) else { return nil }
+    private func tryTranscribe(assignment: ModelAssignment, audioURL: URL) async -> (String?, String?) {
+        guard let params = providerStore.resolveSTT(assignment) else {
+            return (nil, "Could not resolve provider. Check API key in Settings.")
+        }
         let language = UserDefaults.standard.string(forKey: "language") ?? "auto"
         let service = TranscriptionService(
             apiKey: params.apiKey,
@@ -148,7 +164,16 @@ public class EditViewModel: ObservableObject {
             language: language == "auto" ? nil : language,
             apiFormat: params.apiFormat
         )
-        return try? await service.transcribe(audioFileURL: audioURL)
+        do {
+            let apiStart = Date()
+            let text = try await service.transcribe(audioFileURL: audioURL)
+            print("[Liuyu Timing] STT API call [\(params.model)] — \(String(format: "%.2f", Date().timeIntervalSince(apiStart)))s")
+            return (text, nil)
+        } catch {
+            let detail = "[\(params.model)] \(error.localizedDescription)"
+            print("[Liuyu STT] \(detail) | endpoint=\(params.endpoint)")
+            return (nil, detail)
+        }
     }
 
     private func editWithLLM(instruction: String, feature: FeatureConfig) async {
@@ -201,7 +226,10 @@ public class EditViewModel: ObservableObject {
             endpoint: params.endpoint,
             model: params.model
         )
-        return try? await service.chat(system: systemPrompt, user: userMessage)
+        let apiStart = Date()
+        let result = try? await service.chat(system: systemPrompt, user: userMessage)
+        print("[Liuyu Timing] LLM API call [\(params.model)] — \(String(format: "%.2f", Date().timeIntervalSince(apiStart)))s")
+        return result
     }
 
     // MARK: - Actions
@@ -216,34 +244,6 @@ public class EditViewModel: ObservableObject {
     public func copy() {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
-    }
-
-    /// Copy text, activate the previously focused app, and simulate Cmd+V.
-    public func insert() {
-        copy()
-
-        // Find the last non-Liuyu app to paste into
-        let liuyuBundleID = Bundle.main.bundleIdentifier
-        let targetApp = NSWorkspace.shared.runningApplications
-            .filter { $0.isActive == false && $0.bundleIdentifier != liuyuBundleID }
-            .sorted { ($0.activationPolicy.rawValue) < ($1.activationPolicy.rawValue) }
-            .first(where: { $0.activationPolicy == .regular })
-
-        targetApp?.activate()
-        Task {
-            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
-            Self.simulatePaste()
-        }
-    }
-
-    private static func simulatePaste() {
-        let source = CGEventSource(stateID: .combinedSessionState)
-        let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: true)
-        keyDown?.flags = .maskCommand
-        let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: false)
-        keyUp?.flags = .maskCommand
-        keyDown?.post(tap: .cghidEventTap)
-        keyUp?.post(tap: .cghidEventTap)
     }
 
     // MARK: - Cleanup
