@@ -16,13 +16,13 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     private var currentAudioFileURL: URL?
     private var accessibilityPollTimer: Timer?
 
-    private let configStore = ModelConfigStore()
+    private let providerStore = ProviderConfigStore()
     private let minimumRecordingDuration: TimeInterval = 0.3
 
     public override init() { super.init() }
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
-        configStore.migrateIfNeeded()
+        providerStore.migrateIfNeeded()
         RecordingController.cleanupOrphanedFiles()
         setupStatusItem()
         panelController.setup()
@@ -32,7 +32,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         startHotkeyManager()
 
         // First launch: open settings if no active model configured
-        if configStore.activeConfig() == nil {
+        if providerStore.loadFeatureConfig().sttPrimary == nil {
             settingsController.show()
         }
     }
@@ -154,38 +154,46 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func transcribe(audioURL: URL) async {
-        guard let config = configStore.activeConfig() else {
-            panelController.viewModel.showResult("No model configured. Open Settings to add one.")
+        let feature = providerStore.loadFeatureConfig()
+
+        guard let sttAssignment = feature.sttPrimary else {
+            panelController.viewModel.showResult("No STT model configured. Open Settings.")
             panelController.resize(width: 400, height: 120)
             settingsController.show()
             return
         }
 
-        guard let apiKey = configStore.apiKey(for: config), !apiKey.isEmpty else {
-            panelController.viewModel.showResult("No API key for \(config.provider.rawValue). Open Settings.")
-            panelController.resize(width: 400, height: 120)
-            settingsController.show()
-            return
-        }
-
-        let language = UserDefaults.standard.string(forKey: "language") ?? "auto"
-
-        let service = TranscriptionService(
-            apiKey: apiKey,
-            endpoint: config.endpoint,
-            model: config.modelId,
-            language: language == "auto" ? nil : language,
-            apiFormat: config.apiFormat
-        )
-
-        do {
-            let text = try await service.transcribe(audioFileURL: audioURL)
+        // Try primary, then fallback
+        if let text = await tryTranscribe(assignment: sttAssignment, audioURL: audioURL) {
             panelController.viewModel.showResult(text)
             panelController.resize(width: 400, height: 120)
-        } catch {
-            panelController.viewModel.showResult("Error: \(error.localizedDescription)")
-            panelController.resize(width: 400, height: 120)
+            return
         }
+
+        if let fallback = feature.sttFallback,
+           let text = await tryTranscribe(assignment: fallback, audioURL: audioURL) {
+            panelController.viewModel.showResult(text)
+            panelController.resize(width: 400, height: 120)
+            return
+        }
+
+        panelController.viewModel.showResult("Transcription failed. Check Settings.")
+        panelController.resize(width: 400, height: 120)
+    }
+
+    private func tryTranscribe(assignment: ModelAssignment, audioURL: URL) async -> String? {
+        guard let params = providerStore.resolveSTT(assignment) else { return nil }
+
+        let language = UserDefaults.standard.string(forKey: "language") ?? "auto"
+        let service = TranscriptionService(
+            apiKey: params.apiKey,
+            endpoint: params.endpoint,
+            model: params.model,
+            language: language == "auto" ? nil : language,
+            apiFormat: params.apiFormat
+        )
+
+        return try? await service.transcribe(audioFileURL: audioURL)
     }
 
     // MARK: - Panel Actions
