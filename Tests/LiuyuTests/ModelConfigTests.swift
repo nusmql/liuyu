@@ -102,23 +102,27 @@ final class ModelConfigTests: XCTestCase {
 
     func testOpenAIProvider() {
         let def = ProviderDefinition.catalog[.openai]!
-        XCTAssertEqual(def.endpoint, "https://api.openai.com/v1/audio/transcriptions")
-        XCTAssertTrue(def.models.contains("whisper-1"))
-        XCTAssertEqual(def.apiFormat, .whisperMultipart)
+        XCTAssertEqual(def.sttEndpoint, "https://api.openai.com/v1/audio/transcriptions")
+        XCTAssertEqual(def.llmEndpoint, "https://api.openai.com/v1/chat/completions")
+        XCTAssertTrue(def.sttModels.contains("whisper-1"))
+        XCTAssertTrue(def.llmModels.contains("gpt-4o-mini"))
+        XCTAssertEqual(def.sttApiFormat, .whisperMultipart)
     }
 
     func testGLMProvider() {
         let def = ProviderDefinition.catalog[.glm]!
-        XCTAssertTrue(def.endpoint.contains("bigmodel.cn"))
-        XCTAssertTrue(def.models.contains("glm-asr-2512"))
-        XCTAssertEqual(def.apiFormat, .whisperMultipart)
+        XCTAssertTrue(def.sttEndpoint.contains("bigmodel.cn"))
+        XCTAssertTrue(def.sttModels.contains("glm-asr-2512"))
+        XCTAssertTrue(def.llmModels.contains("glm-4-flash"))
+        XCTAssertEqual(def.sttApiFormat, .whisperMultipart)
     }
 
     func testAlibabaProvider() {
         let def = ProviderDefinition.catalog[.alibaba]!
-        XCTAssertTrue(def.endpoint.contains("dashscope"))
-        XCTAssertTrue(def.models.contains("qwen3-asr-flash"))
-        XCTAssertEqual(def.apiFormat, .chatCompletionsAudio)
+        XCTAssertTrue(def.sttEndpoint.contains("dashscope"))
+        XCTAssertTrue(def.sttModels.contains("qwen3-asr-flash"))
+        XCTAssertTrue(def.llmModels.contains("qwen-turbo"))
+        XCTAssertEqual(def.sttApiFormat, .chatCompletionsAudio)
     }
 
     // MARK: - HotkeyPreset

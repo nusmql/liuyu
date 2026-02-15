@@ -22,44 +22,61 @@ public enum ApiFormat: String, Codable, Sendable {
 
 public struct ProviderDefinition: Sendable {
     public let type: ProviderType
-    public let endpoint: String
-    public let models: [String]
-    public let apiFormat: ApiFormat
+    public let sttEndpoint: String
+    public let llmEndpoint: String
+    public let sttModels: [String]
+    public let llmModels: [String]
+    public let sttApiFormat: ApiFormat
+
+    // Backward-compat computed properties
+    public var endpoint: String { sttEndpoint }
+    public var models: [String] { sttModels }
+    public var apiFormat: ApiFormat { sttApiFormat }
 
     public static let catalog: [ProviderType: ProviderDefinition] = [
         .openai: ProviderDefinition(
             type: .openai,
-            endpoint: "https://api.openai.com/v1/audio/transcriptions",
-            models: ["whisper-1"],
-            apiFormat: .whisperMultipart
+            sttEndpoint: "https://api.openai.com/v1/audio/transcriptions",
+            llmEndpoint: "https://api.openai.com/v1/chat/completions",
+            sttModels: ["whisper-1"],
+            llmModels: ["gpt-4o-mini", "gpt-4o"],
+            sttApiFormat: .whisperMultipart
         ),
         .groq: ProviderDefinition(
             type: .groq,
-            endpoint: "https://api.groq.com/openai/v1/audio/transcriptions",
-            models: [
+            sttEndpoint: "https://api.groq.com/openai/v1/audio/transcriptions",
+            llmEndpoint: "https://api.groq.com/openai/v1/chat/completions",
+            sttModels: [
                 "whisper-large-v3",
                 "whisper-large-v3-turbo",
                 "distil-whisper-large-v3-en"
             ],
-            apiFormat: .whisperMultipart
+            llmModels: ["llama-3.3-70b-versatile"],
+            sttApiFormat: .whisperMultipart
         ),
         .glm: ProviderDefinition(
             type: .glm,
-            endpoint: "https://open.bigmodel.cn/api/paas/v4/audio/transcriptions",
-            models: ["glm-asr-2512"],
-            apiFormat: .whisperMultipart
+            sttEndpoint: "https://open.bigmodel.cn/api/paas/v4/audio/transcriptions",
+            llmEndpoint: "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+            sttModels: ["glm-asr-2512"],
+            llmModels: ["glm-4-flash"],
+            sttApiFormat: .whisperMultipart
         ),
         .alibaba: ProviderDefinition(
             type: .alibaba,
-            endpoint: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
-            models: ["qwen3-asr-flash"],
-            apiFormat: .chatCompletionsAudio
+            sttEndpoint: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+            llmEndpoint: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+            sttModels: ["qwen3-asr-flash"],
+            llmModels: ["qwen-turbo"],
+            sttApiFormat: .chatCompletionsAudio
         ),
         .custom: ProviderDefinition(
             type: .custom,
-            endpoint: "",
-            models: [],
-            apiFormat: .whisperMultipart
+            sttEndpoint: "",
+            llmEndpoint: "",
+            sttModels: [],
+            llmModels: [],
+            sttApiFormat: .whisperMultipart
         )
     ]
 }
