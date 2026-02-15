@@ -45,39 +45,57 @@ struct EditView: View {
 
     @ViewBuilder
     private var micArea: some View {
-        switch viewModel.editState {
-        case .idle:
-            micButton
+        // Gesture lives on this stable VStack so it persists when
+        // the inner content switches from micButton → waveform.
+        VStack {
+            switch viewModel.editState {
+            case .idle:
+                micButtonContent
 
-        case .recording:
-            waveformView
-                .onChange(of: viewModel.audioLevel) { newLevel in
-                    waveformLevels.removeFirst()
-                    waveformLevels.append(newLevel)
+            case .recording:
+                waveformView
+                    .onChange(of: viewModel.audioLevel) { newLevel in
+                        waveformLevels.removeFirst()
+                        waveformLevels.append(newLevel)
+                    }
+
+            case .transcribing:
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .scaleEffect(0.8)
+                    Text("Transcribing...")
+                        .foregroundStyle(.secondary)
+                        .font(.system(size: 13))
                 }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 20)
 
-        case .transcribing:
-            HStack(spacing: 8) {
-                ProgressView()
-                    .scaleEffect(0.8)
-                Text("Transcribing...")
-                    .foregroundStyle(.secondary)
-                    .font(.system(size: 13))
+            case .editing:
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .scaleEffect(0.8)
+                    Text("Editing...")
+                        .foregroundStyle(.secondary)
+                        .font(.system(size: 13))
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 20)
             }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 20)
-
-        case .editing:
-            HStack(spacing: 8) {
-                ProgressView()
-                    .scaleEffect(0.8)
-                Text("Editing...")
-                    .foregroundStyle(.secondary)
-                    .font(.system(size: 13))
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 20)
         }
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in
+                    if viewModel.editState == .idle {
+                        viewModel.startRecording()
+                    }
+                }
+                .onEnded { _ in
+                    if case .recording = viewModel.editState {
+                        viewModel.stopRecording()
+                    }
+                }
+        )
 
         if let error = viewModel.errorMessage {
             Text(error)
@@ -93,33 +111,19 @@ struct EditView: View {
         }
     }
 
-    private var micButton: some View {
+    private var micButtonContent: some View {
         Image(nsImage: Lucide.mic)
             .resizable()
             .frame(width: 24, height: 24)
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 20)
-            .contentShape(Rectangle())
             .overlay {
                 Text(viewModel.micButtonLabel)
                     .font(.caption)
                     .foregroundStyle(.tertiary)
                     .offset(y: 28)
             }
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { _ in
-                        if viewModel.editState == .idle {
-                            viewModel.startRecording()
-                        }
-                    }
-                    .onEnded { _ in
-                        if case .recording = viewModel.editState {
-                            viewModel.stopRecording()
-                        }
-                    }
-            )
     }
 
     private var waveformView: some View {
