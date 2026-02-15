@@ -38,7 +38,7 @@ public class EditViewModel: ObservableObject {
 
     public init() {
         recordingController.$audioLevel
-            .receive(on: DispatchQueue.main)
+            .receive(on: RunLoop.main)
             .sink { [weak self] level in
                 guard let self, case .recording = self.editState else { return }
                 self.editState = .recording(audioLevel: level)
@@ -69,8 +69,9 @@ public class EditViewModel: ObservableObject {
 
         if elapsed < minimumRecordingDuration {
             let remaining = minimumRecordingDuration - elapsed
-            DispatchQueue.main.asyncAfter(deadline: .now() + remaining) { [weak self] in
-                self?.finishRecording()
+            Task {
+                try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
+                finishRecording()
             }
         } else {
             finishRecording()
@@ -229,7 +230,8 @@ public class EditViewModel: ObservableObject {
             .first(where: { $0.activationPolicy == .regular })
 
         targetApp?.activate()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+        Task {
+            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
             Self.simulatePaste()
         }
     }
