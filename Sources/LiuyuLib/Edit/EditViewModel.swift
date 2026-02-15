@@ -45,6 +45,18 @@ public class EditViewModel: ObservableObject {
                 self.editState = .recording(audioLevel: level)
             }
             .store(in: &cancellables)
+
+        // Pre-warm the audio engine so the first recording starts instantly
+        // and the pre-roll buffer captures audio before the user clicks.
+        // Delay gives CoreAudio HAL time to initialize after app/window launch.
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 500_000_000) // 0.5s
+            do {
+                try self?.recordingController.warmUp()
+            } catch {
+                print("[Liuyu Audio] Pre-warm failed (will retry on first recording): \(error.localizedDescription)")
+            }
+        }
     }
 
     // MARK: - Recording
@@ -65,8 +77,10 @@ public class EditViewModel: ObservableObject {
     }
 
     public func stopRecording() {
-        // Reset the failed flag so next gesture can try again
+        // Always reset the failed flag so next gesture can try again
         recordingFailed = false
+
+        guard case .recording = editState else { return }
 
         let elapsed = Date().timeIntervalSince(recordingStartTime ?? Date())
 

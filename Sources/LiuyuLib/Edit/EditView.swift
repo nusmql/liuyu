@@ -98,9 +98,7 @@ struct EditView: View {
                     }
                 }
                 .onEnded { _ in
-                    if case .recording = viewModel.editState {
-                        viewModel.stopRecording()
-                    }
+                    viewModel.stopRecording()
                 }
         )
 

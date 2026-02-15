@@ -8,10 +8,36 @@ public class RecordingController: ObservableObject {
     @Published public var audioLevel: Float = 0.0
 
     private lazy var engine = AVAudioEngine()
-    private var audioFile: AVAudioFile?
     private var tempFileURL: URL?
+    private var isWarmedUp = false
+    private var converter: AVAudioConverter?
+    private var configChangeObserver: NSObjectProtocol?
+    private var needsRewarm = false
 
-    public init() {}
+    // Thread-safe state shared with the audio render thread
+    fileprivate let audioState = AudioState()
+
+    public init() {
+        // Re-warm the engine when the audio device changes (e.g. user switches mic).
+        // The tap format must match the new hardware format.
+        configChangeObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.isWarmedUp else { return }
+                if self.audioState.isRecording {
+                    // Don't destroy active recording — re-warm after stop()
+                    self.needsRewarm = true
+                    print("[Liuyu Audio] Audio device changed during recording — will re-warm after stop")
+                    return
+                }
+                print("[Liuyu Audio] Audio device changed — re-warming engine")
+                self.coolDown()
+                try? self.warmUp()
+            }
+        }
+    }
 
     public enum RecordingError: Error, LocalizedError {
         case microphonePermissionDenied
@@ -39,12 +65,76 @@ public class RecordingController: ObservableObject {
         }
     }
 
-    /// Start recording. Returns immediately. Call stop() to get the file URL.
-    public func start() throws {
+    // MARK: - Engine Lifecycle
+
+    /// Pre-warm the audio engine so recording starts instantly.
+    /// The engine runs continuously with a tap that fills a ring buffer.
+    /// Call this early (e.g. when the Edit window opens) for best results.
+    public func warmUp() throws {
+        guard !isWarmedUp else { return }
+
+        // Clean slate — important if a previous warmUp attempt failed
+        engine.reset()
+
         let inputNode = engine.inputNode
         let inputFormat = inputNode.outputFormat(forBus: 0)
 
-        // Create temp WAV file (16 kHz, mono, 16-bit PCM — universally supported by all STT APIs)
+        guard inputFormat.sampleRate > 0 else {
+            print("[Liuyu Audio] No audio input available (sample rate = 0)")
+            return
+        }
+
+        let pcmFormat = AVAudioFormat(standardFormatWithSampleRate: 16000, channels: 1)!
+        let converter = AVAudioConverter(from: inputFormat, to: pcmFormat)
+        self.converter = converter
+
+        // Install tap that continuously converts audio and feeds AudioState.
+        // Delegate to a free function so the closure is NOT @MainActor-isolated.
+        _installAudioTap(on: inputNode, format: inputFormat,
+                         converter: converter, audioState: audioState, controller: self)
+
+        // Pre-allocate audio resources before starting
+        engine.prepare()
+
+        do {
+            try engine.start()
+            isWarmedUp = true
+            print("[Liuyu Audio] Engine warmed up — pre-roll buffering active")
+        } catch {
+            inputNode.removeTap(onBus: 0)
+            engine.stop()
+            engine.reset()
+            self.converter = nil
+            throw RecordingError.engineStartFailed(error)
+        }
+    }
+
+    /// Release the audio engine and microphone.
+    public func coolDown() {
+        guard isWarmedUp else { return }
+        engine.inputNode.removeTap(onBus: 0)
+        engine.stop()
+        engine.reset()
+        converter = nil
+        isWarmedUp = false
+        audioState.clear()
+        print("[Liuyu Audio] Engine cooled down")
+    }
+
+    // MARK: - Recording
+
+    /// Start recording. The engine must be warmed up (done automatically if needed).
+    /// Pre-roll audio (~0.5s captured before this call) is flushed to the file.
+    public func start() throws {
+        // Re-warm if engine died (e.g. after system sleep)
+        if isWarmedUp && !engine.isRunning {
+            coolDown()
+        }
+        if !isWarmedUp {
+            try warmUp()
+        }
+
+        // Create temp WAV file (16 kHz, mono, 16-bit PCM)
         let tempURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("liuyu_\(UUID().uuidString).wav")
 
@@ -64,32 +154,16 @@ public class RecordingController: ObservableObject {
             throw RecordingError.fileCreationFailed(error)
         }
 
-        // Install tap for audio data and metering.
-        // The converter resamples to 16 kHz mono PCM.
-        // Delegate to a free function so the closure is NOT @MainActor-isolated
-        // (non-Sendable captures from @MainActor methods inherit actor isolation,
-        // which crashes when AVAudioEngine calls the tap from its render thread).
-        let pcmFormat = AVAudioFormat(standardFormatWithSampleRate: 16000, channels: 1)!
-        let converter = AVAudioConverter(from: inputFormat, to: pcmFormat)
-        _installAudioTap(on: inputNode, format: inputFormat,
-                         converter: converter, audioFile: audioFile, controller: self)
+        // Atomically flush pre-roll buffers to file and start recording
+        audioState.startRecording(audioFile: audioFile)
 
-        do {
-            try engine.start()
-        } catch {
-            inputNode.removeTap(onBus: 0)
-            throw RecordingError.engineStartFailed(error)
-        }
-
-        self.audioFile = audioFile
         self.tempFileURL = tempURL
     }
 
     /// Stop recording and return the temp file URL.
+    /// The engine stays warm for the next recording.
     public func stop() -> URL? {
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
-        engine.reset()  // Clear HAL state so next start() works cleanly
+        audioState.stopRecording()
 
         // Log file size for debugging
         if let url = tempFileURL,
@@ -98,8 +172,16 @@ public class RecordingController: ObservableObject {
             print("[Liuyu Audio] WAV file: \(size) bytes at \(url.lastPathComponent)")
         }
 
-        audioFile = nil
         audioLevel = 0.0
+
+        // Re-warm if audio device changed during recording
+        if needsRewarm {
+            needsRewarm = false
+            print("[Liuyu Audio] Deferred re-warm — applying now")
+            coolDown()
+            try? warmUp()
+        }
+
         return tempFileURL
     }
 
@@ -120,9 +202,11 @@ public class RecordingController: ObservableObject {
         try? FileManager.default.removeItem(at: url)
     }
 
+    // MARK: - Audio Processing (called from audio render thread)
+
     fileprivate nonisolated func processBuffer(_ buffer: AVAudioPCMBuffer,
                                                converter: AVAudioConverter?,
-                                               audioFile: AVAudioFile) {
+                                               audioState: AudioState) {
         // Calculate RMS audio level
         guard let channelData = buffer.floatChannelData?[0] else { return }
         let frameCount = Int(buffer.frameLength)
@@ -137,40 +221,121 @@ public class RecordingController: ObservableObject {
         let db = 20 * log10(max(rms, 1e-6))
         let normalized = max(0, min(1, (db + 50) / 50))
 
-        Task { @MainActor [weak self] in
-            self?.audioLevel = normalized
+        // Only publish audio level while recording (avoids phantom UI updates)
+        if audioState.isRecording {
+            Task { @MainActor [weak self] in
+                self?.audioLevel = normalized
+            }
         }
 
-        // Write converted audio to file
-        if let converter {
-            let outputFrameCapacity = AVAudioFrameCount(
-                ceil(Double(buffer.frameLength) * (16000.0 / buffer.format.sampleRate))
-            )
-            guard let convertedBuffer = AVAudioPCMBuffer(
-                pcmFormat: converter.outputFormat,
-                frameCapacity: outputFrameCapacity
-            ) else { return }
+        // Convert to 16kHz mono PCM
+        guard let converter else { return }
+        let outputFrameCapacity = AVAudioFrameCount(
+            ceil(Double(buffer.frameLength) * (16000.0 / buffer.format.sampleRate))
+        )
+        guard let convertedBuffer = AVAudioPCMBuffer(
+            pcmFormat: converter.outputFormat,
+            frameCapacity: outputFrameCapacity
+        ) else { return }
 
-            var error: NSError?
-            // The converter calls this block synchronously, so the capture is safe.
-            // Use nonisolated(unsafe) to silence the Swift 6 concurrency warning.
-            nonisolated(unsafe) var hasData = false
-            converter.convert(to: convertedBuffer, error: &error) { _, status in
-                if hasData {
-                    status.pointee = .noDataNow
-                    return nil
-                }
-                hasData = true
-                status.pointee = .haveData
-                return buffer
+        var error: NSError?
+        // The converter calls this block synchronously, so the capture is safe.
+        // Use nonisolated(unsafe) to silence the Swift 6 concurrency warning.
+        nonisolated(unsafe) var hasData = false
+        converter.convert(to: convertedBuffer, error: &error) { _, status in
+            if hasData {
+                status.pointee = .noDataNow
+                return nil
             }
+            hasData = true
+            status.pointee = .haveData
+            return buffer
+        }
 
-            if error == nil && convertedBuffer.frameLength > 0 {
-                try? audioFile.write(from: convertedBuffer)
-            }
+        if error == nil && convertedBuffer.frameLength > 0 {
+            // AudioState routes the buffer to pre-roll ring buffer or audio file
+            audioState.handleBuffer(convertedBuffer)
         }
     }
 }
+
+// MARK: - Thread-Safe Audio State
+
+/// Shared state between @MainActor (start/stop) and the audio render thread (tap callback).
+/// Routes converted PCM buffers to either a pre-roll ring buffer or the active audio file.
+fileprivate final class AudioState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _isRecording = false
+    private var _audioFile: AVAudioFile?
+    private var _preRollBuffers: [AVAudioPCMBuffer] = []
+
+    // At 16kHz input with 1024-frame tap buffers at ~48kHz, each callback ≈ 21ms.
+    // 24 buffers ≈ 0.5 seconds of pre-roll audio.
+    private let maxPreRollCount = 24
+
+    var isRecording: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return _isRecording
+    }
+
+    /// Called from audio thread on each tap callback.
+    /// If recording: writes directly to audio file.
+    /// If not recording: stores in ring buffer (oldest evicted when full).
+    func handleBuffer(_ buffer: AVAudioPCMBuffer) {
+        lock.lock()
+        if _isRecording, let file = _audioFile {
+            // Hold strong reference to file, then unlock before I/O
+            lock.unlock()
+            try? file.write(from: buffer)
+        } else {
+            _preRollBuffers.append(buffer)
+            if _preRollBuffers.count > maxPreRollCount {
+                _preRollBuffers.removeFirst()
+            }
+            lock.unlock()
+        }
+    }
+
+    /// Called from MainActor. Flushes pre-roll buffers to file, then starts recording.
+    /// The lock ensures no gap between pre-roll flush and live recording.
+    func startRecording(audioFile: AVAudioFile) {
+        lock.lock()
+        // Write buffered pre-roll audio to file first
+        let preRollCount = _preRollBuffers.count
+        for buffer in _preRollBuffers {
+            try? audioFile.write(from: buffer)
+        }
+        _preRollBuffers.removeAll()
+        _audioFile = audioFile
+        _isRecording = true
+        lock.unlock()
+
+        if preRollCount > 0 {
+            print("[Liuyu Audio] Flushed \(preRollCount) pre-roll buffers (~\(preRollCount * 21)ms)")
+        }
+    }
+
+    /// Called from MainActor. Stops routing buffers to file.
+    /// Buffers resume going to the pre-roll ring buffer.
+    func stopRecording() {
+        lock.lock()
+        _isRecording = false
+        _audioFile = nil
+        lock.unlock()
+    }
+
+    /// Clear all state (used during coolDown).
+    func clear() {
+        lock.lock()
+        _preRollBuffers.removeAll()
+        _isRecording = false
+        _audioFile = nil
+        lock.unlock()
+    }
+}
+
+// MARK: - Tap Installation (free function)
 
 // Free function — no @MainActor context, so the closure is non-isolated
 // and safe to call from AVAudioEngine's render thread.
@@ -178,11 +343,11 @@ private func _installAudioTap(
     on inputNode: AVAudioInputNode,
     format: AVAudioFormat,
     converter: AVAudioConverter?,
-    audioFile: AVAudioFile,
+    audioState: AudioState,
     controller: RecordingController
 ) {
     weak let weakController = controller
     inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
-        weakController?.processBuffer(buffer, converter: converter, audioFile: audioFile)
+        weakController?.processBuffer(buffer, converter: converter, audioState: audioState)
     }
 }
