@@ -9,6 +9,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     private let recordingController = RecordingController()
     private let panelController = FloatingPanelController()
     private let settingsController = SettingsWindowController()
+    private let editController = EditWindowController()
 
     private var cancellables = Set<AnyCancellable>()
     nonisolated(unsafe) private var previousApp: NSRunningApplication?
@@ -46,10 +47,15 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let menu = NSMenu()
+        menu.addItem(NSMenuItem(title: "Edit...", action: #selector(openEdit), keyEquivalent: "e"))
         menu.addItem(NSMenuItem(title: "Settings...", action: #selector(openSettings), keyEquivalent: ","))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit Liuyu", action: #selector(quitApp), keyEquivalent: "q"))
         statusItem.menu = menu
+    }
+
+    @objc private func openEdit() {
+        editController.show()
     }
 
     @objc private func openSettings() {
