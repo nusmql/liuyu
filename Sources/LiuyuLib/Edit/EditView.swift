@@ -6,7 +6,6 @@ struct EditView: View {
     @StateObject private var viewModel = EditViewModel()
     @State private var waveformLevels: [Float] = Array(repeating: 0, count: 7)
 
-    let previousApp: NSRunningApplication?
     let onClose: () -> Void
 
     var body: some View {
@@ -26,19 +25,22 @@ struct EditView: View {
 
     @ViewBuilder
     private var contentArea: some View {
-        ScrollView {
-            VStack(spacing: 16) {
-                if viewModel.hasText {
-                    TextEditor(text: $viewModel.text)
-                        .font(.system(size: 14))
-                        .scrollContentBackground(.hidden)
-                        .frame(maxWidth: .infinity, minHeight: 100)
-                }
-
-                micArea
+        VStack(spacing: 16) {
+            if viewModel.hasText {
+                TextEditor(text: $viewModel.text)
+                    .font(.system(size: 14))
+                    .scrollContentBackground(.hidden)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .padding(20)
+
+            micArea
+                .frame(maxWidth: .infinity)
+
+            if !viewModel.hasText {
+                Spacer()
+            }
         }
+        .padding(20)
     }
 
     @ViewBuilder
@@ -168,7 +170,7 @@ struct EditView: View {
             .disabled(!viewModel.hasText)
 
             Button(action: {
-                viewModel.insert(previousApp: previousApp)
+                viewModel.insert()
                 onClose()
             }) {
                 Label {

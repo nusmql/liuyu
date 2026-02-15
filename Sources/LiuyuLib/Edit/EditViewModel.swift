@@ -21,6 +21,7 @@ public class EditViewModel: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private var recordingStartTime: Date?
     private var currentAudioURL: URL?
+    private var recordingFailed = false
 
     private let minimumRecordingDuration: TimeInterval = 0.3
 
@@ -48,17 +49,22 @@ public class EditViewModel: ObservableObject {
     // MARK: - Recording
 
     public func startRecording() {
+        guard !recordingFailed else { return }
         errorMessage = nil
         do {
             try recordingController.start()
             recordingStartTime = Date()
             editState = .recording(audioLevel: 0)
         } catch {
+            recordingFailed = true
             errorMessage = error.localizedDescription
         }
     }
 
     public func stopRecording() {
+        // Reset the failed flag so next gesture can try again
+        recordingFailed = false
+
         let elapsed = Date().timeIntervalSince(recordingStartTime ?? Date())
 
         if elapsed < minimumRecordingDuration {
@@ -211,9 +217,18 @@ public class EditViewModel: ObservableObject {
         NSPasteboard.general.setString(text, forType: .string)
     }
 
-    public func insert(previousApp: NSRunningApplication?) {
+    /// Copy text, activate the previously focused app, and simulate Cmd+V.
+    public func insert() {
         copy()
-        previousApp?.activate()
+
+        // Find the last non-Liuyu app to paste into
+        let liuyuBundleID = Bundle.main.bundleIdentifier
+        let targetApp = NSWorkspace.shared.runningApplications
+            .filter { $0.isActive == false && $0.bundleIdentifier != liuyuBundleID }
+            .sorted { ($0.activationPolicy.rawValue) < ($1.activationPolicy.rawValue) }
+            .first(where: { $0.activationPolicy == .regular })
+
+        targetApp?.activate()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             Self.simulatePaste()
         }

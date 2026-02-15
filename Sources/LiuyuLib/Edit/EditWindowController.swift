@@ -5,12 +5,15 @@ import SwiftUI
 @MainActor
 class EditWindowController: NSObject, NSWindowDelegate {
     private var window: NSWindow?
-    private var previousApp: NSRunningApplication?
+
+    var isWindowVisible: Bool {
+        window?.isVisible ?? false
+    }
+
+    /// Called when any managed window closes, to decide activation policy.
+    var onWindowClose: (() -> Void)?
 
     func show() {
-        // Save the previously focused app before showing our window
-        previousApp = NSWorkspace.shared.frontmostApplication
-
         if let window, window.isVisible {
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
@@ -27,10 +30,7 @@ class EditWindowController: NSObject, NSWindowDelegate {
         window.minSize = NSSize(width: 400, height: 300)
         window.center()
         window.contentView = NSHostingView(
-            rootView: EditView(
-                previousApp: previousApp,
-                onClose: { [weak self] in self?.close() }
-            )
+            rootView: EditView(onClose: { [weak self] in self?.close() })
         )
         window.isReleasedWhenClosed = false
         window.delegate = self
@@ -47,7 +47,7 @@ class EditWindowController: NSObject, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
-        NSApp.setActivationPolicy(.accessory)
+        onWindowClose?()
     }
 
     func windowShouldZoom(_ window: NSWindow, toFrame newFrame: NSRect) -> Bool {

@@ -5,6 +5,13 @@ import SwiftUI
 public class SettingsWindowController: NSObject, NSWindowDelegate {
     private var window: NSWindow?
 
+    var isWindowVisible: Bool {
+        window?.isVisible ?? false
+    }
+
+    /// Called when any managed window closes, to decide activation policy.
+    var onWindowClose: (() -> Void)?
+
     public override init() { super.init() }
 
     public func show() {
@@ -36,8 +43,7 @@ public class SettingsWindowController: NSObject, NSWindowDelegate {
     }
 
     public func windowWillClose(_ notification: Notification) {
-        // Return to menu bar-only mode when settings closes
-        NSApp.setActivationPolicy(.accessory)
+        onWindowClose?()
     }
 
     public func windowShouldZoom(_ window: NSWindow, toFrame newFrame: NSRect) -> Bool {

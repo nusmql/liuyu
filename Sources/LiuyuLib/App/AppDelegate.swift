@@ -32,9 +32,22 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         applyHotkeyPreset()
         startHotkeyManager()
 
+        // Centralize activation policy: only go accessory when ALL windows are closed
+        let updatePolicy: () -> Void = { [weak self] in
+            self?.updateActivationPolicy()
+        }
+        settingsController.onWindowClose = updatePolicy
+        editController.onWindowClose = updatePolicy
+
         // First launch: open settings if no active model configured
         if providerStore.loadFeatureConfig().sttPrimary == nil {
             settingsController.show()
+        }
+    }
+
+    private func updateActivationPolicy() {
+        if !settingsController.isWindowVisible && !editController.isWindowVisible {
+            NSApp.setActivationPolicy(.accessory)
         }
     }
 
