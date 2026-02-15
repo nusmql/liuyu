@@ -10,6 +10,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     private let panelController = FloatingPanelController()
     private let settingsController = SettingsWindowController()
     private let editController = EditWindowController()
+    private let onboardingController = OnboardingWindowController()
 
     private var cancellables = Set<AnyCancellable>()
     nonisolated(unsafe) private var previousApp: NSRunningApplication?
@@ -40,15 +41,19 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         }
         settingsController.onWindowClose = updatePolicy
         editController.onWindowClose = updatePolicy
+        onboardingController.onWindowClose = updatePolicy
 
-        // First launch: open settings if no active model configured
-        if providerStore.loadFeatureConfig().sttPrimary == nil {
-            settingsController.show()
+        // First launch: show onboarding wizard
+        if !UserDefaults.standard.bool(forKey: "hasCompletedOnboarding") {
+            onboardingController.onComplete = { [weak self] in
+                self?.updateActivationPolicy()
+            }
+            onboardingController.show()
         }
     }
 
     private func updateActivationPolicy() {
-        if !settingsController.isWindowVisible && !editController.isWindowVisible {
+        if !settingsController.isWindowVisible && !editController.isWindowVisible && !onboardingController.isWindowVisible {
             NSApp.setActivationPolicy(.accessory)
         }
     }
