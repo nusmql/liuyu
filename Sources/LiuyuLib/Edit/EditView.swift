@@ -32,10 +32,23 @@ struct EditView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
         }
-        .modifier(ReturnKeyHandler(hasText: viewModel.hasText, onReturn: {
-            onInsert(viewModel.text)
-            onClose()
-        }))
+        .modifier(EditViewKeyboardHandler(
+            hasText: viewModel.hasText,
+            editState: viewModel.editState,
+            onReturn: {
+                onInsert(viewModel.text)
+                onClose()
+            },
+            onEscape: {
+                viewModel.clear()
+            },
+            onStartRecording: {
+                viewModel.startRecording()
+            },
+            onStopRecording: {
+                viewModel.stopRecording()
+            }
+        ))
     }
 
     // MARK: - Content Area
@@ -175,7 +188,7 @@ struct EditView: View {
 
             Button(action: { viewModel.clear() }) {
                 Label {
-                    Text("Clear")
+                    Text("Clear (Esc)")
                 } icon: {
                     Image(nsImage: Lucide.trash2)
                         .resizable()
@@ -221,28 +234,57 @@ struct EditView: View {
     }
 }
 
-// MARK: - Return Key Handler
+// MARK: - Keyboard Handler
 
-/// A view modifier that handles Return key press to trigger an action.
-private struct ReturnKeyHandler: ViewModifier {
+/// A view modifier that handles keyboard shortcuts in the Edit view.
+private struct EditViewKeyboardHandler: ViewModifier {
     let hasText: Bool
+    let editState: EditState
     let onReturn: () -> Void
+    let onEscape: () -> Void
+    let onStartRecording: () -> Void
+    let onStopRecording: () -> Void
 
-    @State private var monitor: Any?
+    @State private var keyMonitor: Any?
+    @State private var isRecordingViaShortcut = false
 
     func body(content: Content) -> some View {
         content
             .onAppear {
-                monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-                    if event.keyCode == 36 && hasText { // Return key
+                keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp]) { event in
+                    // Return key (36) - Insert and close
+                    if event.keyCode == 36 && hasText {
                         onReturn()
-                        return nil // Consume the event
+                        return nil
                     }
+
+                    // Escape key (53) - Clear text
+                    if event.keyCode == 53 {
+                        onEscape()
+                        return nil
+                    }
+
+                    // Cmd+R (for "Record/Redo") - Hold to record, release to stop
+                    // keyCode 15 = R, modifierFlags contains .command
+                    if event.keyCode == 15 && event.modifierFlags.contains(.command) {
+                        if event.type == .keyDown && !isRecordingViaShortcut {
+                            // Only start if currently idle
+                            if case .idle = editState {
+                                isRecordingViaShortcut = true
+                                onStartRecording()
+                            }
+                        } else if event.type == .keyUp && isRecordingViaShortcut {
+                            isRecordingViaShortcut = false
+                            onStopRecording()
+                        }
+                        return nil
+                    }
+
                     return event
                 }
             }
             .onDisappear {
-                if let monitor = monitor {
+                if let monitor = keyMonitor {
                     NSEvent.removeMonitor(monitor)
                 }
             }
