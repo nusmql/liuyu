@@ -301,10 +301,13 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
                 panelController.hide(immediately: true)
                 // Restart hotkey after transcription
                 try? self.hotkeyManager.start()
-                // Open Edit window after panel is hidden
-                print("[App] Opening Edit window")
-                self.editController.showWithText(text) { [weak self] _ in
-                    self?.cleanupCurrentAudio()
+                // Open Edit window on next runloop to avoid layout conflicts
+                print("[App] Scheduling Edit window open")
+                DispatchQueue.main.async {
+                    print("[App] Opening Edit window")
+                    self.editController.showWithText(text) { [weak self] _ in
+                        self?.cleanupCurrentAudio()
+                    }
                 }
             }
         }
