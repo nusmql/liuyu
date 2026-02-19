@@ -163,23 +163,13 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] event in
                 guard let self else { return }
-                print("[AppDelegate] Hotkey event received: \(event), shortcut: \(self.hotkeyManager.shortcut.displayString), isModifierOnly: \(self.hotkeyManager.shortcut.isModifierOnly)")
-                if self.hotkeyManager.shortcut.isModifierOnly {
-                    // Modifier-only: hold to record, release to stop
-                    switch event {
-                    case .keyDown:
-                        self.handleKeyDown()
-                    case .keyUp:
-                        self.handleKeyUp()
-                    }
-                } else {
-                    // Key combination: toggle mode
-                    switch event {
-                    case .keyDown:
-                        self.handleToggle()
-                    case .keyUp:
-                        break // Ignore keyUp for toggle mode
-                    }
+                print("[AppDelegate] Hotkey event received: \(event), shortcut: \(self.hotkeyManager.shortcut.displayString)")
+                // ALL shortcuts use hold-to-record behavior
+                switch event {
+                case .keyDown:
+                    self.handleKeyDown()
+                case .keyUp:
+                    self.handleKeyUp()
                 }
             }
             .store(in: &cancellables)
