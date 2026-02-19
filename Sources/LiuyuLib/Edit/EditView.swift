@@ -257,7 +257,7 @@ private struct EditViewKeyboardHandler: ViewModifier {
     @State private var lastEscapePressTime: Date?
 
     // Load settings
-    private var recordShortcut: EditWindowShortcut { .loadEditRecordShortcut() }
+    private var recordShortcut: RecordedShortcut { .loadEditRecordShortcut() }
     private var clearRequiresDoubleTap: Bool { UserDefaults.standard.bool(forKey: "editClearDoubleTap") }
 
     func body(content: Content) -> some View {
@@ -279,7 +279,7 @@ private struct EditViewKeyboardHandler: ViewModifier {
                     }
 
                     // Voice record shortcut - Hold to record, release to stop
-                    if recordShortcut.matches(event) {
+                    if self.matchesRecordShortcut(event) {
                         if event.type == .keyDown && !isRecordingViaShortcut {
                             // Only start if currently idle
                             if case .idle = editState {
@@ -322,5 +322,27 @@ private struct EditViewKeyboardHandler: ViewModifier {
             onEscape()
             return true
         }
+    }
+
+    /// Checks if the event matches the custom record shortcut.
+    private func matchesRecordShortcut(_ event: NSEvent) -> Bool {
+        let shortcut = recordShortcut
+
+        // Check key code matches
+        guard event.keyCode == shortcut.keyCode else {
+            return false
+        }
+
+        // Check modifier flags match
+        let eventModifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        var shortcutModifiers: NSEvent.ModifierFlags = []
+        let flags = shortcut.flags
+
+        if flags.contains(.maskCommand) { shortcutModifiers.insert(.command) }
+        if flags.contains(.maskShift) { shortcutModifiers.insert(.shift) }
+        if flags.contains(.maskAlternate) { shortcutModifiers.insert(.option) }
+        if flags.contains(.maskControl) { shortcutModifiers.insert(.control) }
+
+        return eventModifiers == shortcutModifiers
     }
 }

@@ -148,6 +148,39 @@ public extension RecordedShortcut {
             // Silently fail - the shortcut will revert to default on next load
         }
     }
+
+    // MARK: - Edit Window Record Shortcut Persistence
+
+    private static let editRecordDefaultsKey = "editRecordShortcut"
+
+    /// The default edit record shortcut: Cmd+R
+    public static var defaultEditRecordShortcut: RecordedShortcut {
+        RecordedShortcut(flags: .maskCommand, keyCode: 15, includesFnKey: false) // Cmd+R
+    }
+
+    /// Loads the edit record shortcut from UserDefaults, or returns Cmd+R if none exists.
+    public static func loadEditRecordShortcut() -> RecordedShortcut {
+        guard let data = UserDefaults.standard.data(forKey: editRecordDefaultsKey) else {
+            return .defaultEditRecordShortcut
+        }
+
+        do {
+            let shortcut = try JSONDecoder().decode(RecordedShortcut.self, from: data)
+            return shortcut
+        } catch {
+            return .defaultEditRecordShortcut
+        }
+    }
+
+    /// Saves this RecordedShortcut as the edit record shortcut.
+    public func saveEditRecordShortcut() {
+        do {
+            let data = try JSONEncoder().encode(self)
+            UserDefaults.standard.set(data, forKey: Self.editRecordDefaultsKey)
+        } catch {
+            // Silently fail
+        }
+    }
 }
 
 // MARK: - Edit Window Shortcuts

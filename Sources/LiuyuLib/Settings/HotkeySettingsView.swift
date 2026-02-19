@@ -6,7 +6,8 @@ struct HotkeySettingsView: View {
     @State private var conflictWarning: String? = nil
 
     // Edit window shortcuts
-    @State private var editRecordShortcut: EditWindowShortcut = .loadEditRecordShortcut()
+    @State private var editRecordShortcut: RecordedShortcut? = RecordedShortcut.loadEditRecordShortcut()
+    @State private var editRecordConflictWarning: String? = nil
     @State private var clearRequiresDoubleTap: Bool = UserDefaults.standard.bool(forKey: "editClearDoubleTap")
 
     var body: some View {
@@ -62,15 +63,22 @@ struct HotkeySettingsView: View {
 
                         Spacer()
 
-                        Picker("", selection: $editRecordShortcut) {
-                            ForEach(EditWindowShortcut.allCases) { option in
-                                Text(option.displayName).tag(option)
+                        HStack(spacing: 8) {
+                            if let warning = editRecordConflictWarning {
+                                Image(systemName: "exclamationmark.triangle")
+                                    .foregroundStyle(.orange)
+                                    .font(.caption)
+                                    .help(warning)
                             }
-                        }
-                        .pickerStyle(.segmented)
-                        .frame(width: 140)
-                        .onChange(of: editRecordShortcut) { newValue in
-                            newValue.saveToDefaults()
+
+                            ShortcutRecorderView(shortcut: $editRecordShortcut, onBeginRecording: {
+                                self.editRecordShortcut = nil
+                            })
+                                .frame(width: 140, height: 28)
+                                .onChange(of: editRecordShortcut) { newValue in
+                                    checkEditRecordConflicts(for: newValue)
+                                    newValue?.saveEditRecordShortcut()
+                                }
                         }
                     }
                     .padding(.vertical, 12)
@@ -127,6 +135,28 @@ struct HotkeySettingsView: View {
             conflictWarning = "May conflict with system shortcuts"
         } else {
             conflictWarning = nil
+        }
+    }
+
+    private func checkEditRecordConflicts(for shortcut: RecordedShortcut?) {
+        guard let shortcut = shortcut else {
+            editRecordConflictWarning = nil
+            return
+        }
+
+        let flags = shortcut.flags
+        let modifiers = flags.intersection([.maskCommand, .maskAlternate, .maskControl, .maskShift])
+
+        let commonSystemShortcuts: [CGEventFlags] = [
+            [.maskCommand, .maskShift, .maskAlternate],
+            [.maskCommand, .maskControl],
+            [.maskCommand, .maskShift, .maskControl],
+        ]
+
+        if commonSystemShortcuts.contains(where: { $0 == modifiers }) {
+            editRecordConflictWarning = "May conflict with system shortcuts"
+        } else {
+            editRecordConflictWarning = nil
         }
     }
 }

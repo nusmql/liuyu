@@ -29,11 +29,11 @@ public class EditViewModel: ObservableObject {
     public var hasText: Bool { !text.isEmpty }
 
     public var micButtonLabel: String {
-        let shortcut = EditWindowShortcut.loadEditRecordShortcut()
+        let shortcut = RecordedShortcut.loadEditRecordShortcut()
         if hasText {
-            return "Hold to Edit (or \(shortcut.displayName))"
+            return "Hold to Edit (or \(shortcut.displayString))"
         } else {
-            return "Hold to Speak (or \(shortcut.displayName))"
+            return "Hold to Speak (or \(shortcut.displayString))"
         }
     }
 
