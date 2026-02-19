@@ -302,8 +302,9 @@ public class ShortcutRecorder: NSView {
             setShortcut(shortcut)
         }
 
-        NotificationCenter.default.post(name: .hotkeyRecordingDidEnd, object: self)
+        // Call delegate first to update the shortcut, THEN post notification
         delegate?.shortcutRecorder(self, didRecord: shortcut)
+        NotificationCenter.default.post(name: .hotkeyRecordingDidEnd, object: self)
     }
 
     private func cancelRecording() {
@@ -313,8 +314,9 @@ public class ShortcutRecorder: NSView {
         updateLabel()
         updateAppearance()
 
-        NotificationCenter.default.post(name: .hotkeyRecordingDidEnd, object: self)
+        // Call delegate first, THEN post notification
         delegate?.shortcutRecorder(self, didRecord: nil)
+        NotificationCenter.default.post(name: .hotkeyRecordingDidEnd, object: self)
     }
 
     private func cleanupRecording() {
