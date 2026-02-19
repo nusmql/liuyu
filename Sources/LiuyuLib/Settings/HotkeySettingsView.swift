@@ -18,7 +18,12 @@ struct HotkeySettingsView: View {
 
                     HStack(spacing: 12) {
                         ShortcutRecorderView(shortcut: $shortcut, onBeginRecording: {
-                            // Synchronously stop the global hotkey before recording
+                            // Clear the old shortcut first to prevent it from activating during recording
+                            self.shortcut = nil
+                            // Save nil to defaults and notify to disable the old hotkey
+                            UserDefaults.standard.removeObject(forKey: "recordedShortcut")
+                            NotificationCenter.default.post(name: .hotkeyShortcutChanged, object: nil)
+                            // Then notify that recording has begun
                             NotificationCenter.default.post(name: .hotkeyRecordingDidBegin, object: nil)
                         })
                             .frame(height: 36)

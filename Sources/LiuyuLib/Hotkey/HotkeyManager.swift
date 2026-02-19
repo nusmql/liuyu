@@ -48,7 +48,10 @@ public class HotkeyManager {
         didSet {
             // Restart hotkey registration with new shortcut immediately
             stop()
-            try? start()
+            // Only start if shortcut is valid
+            if shortcut.isValid {
+                try? start()
+            }
         }
     }
 

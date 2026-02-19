@@ -188,8 +188,12 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             .publisher(for: .hotkeyShortcutChanged)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] notification in
-                guard let shortcut = notification.object as? RecordedShortcut else { return }
-                self?.hotkeyManager.shortcut = shortcut
+                if let shortcut = notification.object as? RecordedShortcut {
+                    self?.hotkeyManager.shortcut = shortcut
+                } else {
+                    // nil means disable hotkey (during recording)
+                    self?.hotkeyManager.stop()
+                }
             }
             .store(in: &cancellables)
 
