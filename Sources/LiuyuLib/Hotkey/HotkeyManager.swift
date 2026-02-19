@@ -262,9 +262,9 @@ public class HotkeyManager {
         let modifierMatch = flags.intersection(targetFlags) == targetFlags
 
         // Check Fn key if needed
-        // Note: Fn key state in CGEvent is platform-dependent and may not be reliable
-        // We primarily rely on the keyCode + modifier matching for Fn+key combinations
-        let fnMatch = !shortcut.includesFnKey || true // Always allow for now
+        // CGEvent uses .maskSecondaryFn for Fn key detection
+        let fnKeyPressed = flags.contains(.maskSecondaryFn)
+        let fnMatch = shortcut.includesFnKey == fnKeyPressed
 
         let keyMatch = keyCode == targetKeyCode
 
