@@ -221,7 +221,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             recordingStartTime = Date()
             isRecording = true
         } catch {
-            panelController.viewModel.showResult("Error: \(error.localizedDescription)")
+            panelController.hide()
             isRecording = false
             return
         }
@@ -236,18 +236,13 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func handleKeyUp() {
         let elapsed = Date().timeIntervalSince(recordingStartTime ?? Date())
-
         if elapsed < minimumRecordingDuration {
-            let remaining = minimumRecordingDuration - elapsed
-            Task {
-                try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
-                await MainActor.run {
-                    self.stopRecordingAndTranscribe()
-                }
-            }
-        } else {
-            stopRecordingAndTranscribe()
+            panelController.hide()
+            isRecording = false
+            cleanupCurrentAudio()
+            return
         }
+        stopRecordingAndTranscribe()
     }
 
     private func handleToggle() {
@@ -265,48 +260,22 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         isRecording = false
 
         guard let audioURL = recordingController.stop() else {
-            panelController.viewModel.showResult("Error: No audio recorded.")
+            panelController.hide()
             return
         }
 
         currentAudioFileURL = audioURL
         panelController.viewModel.showProcessing()
-        panelController.resize(width: 280, height: 80)
 
         Task {
-            await transcribe(audioURL: audioURL)
-        }
-    }
-
-    private func transcribe(audioURL: URL) async {
-        let feature = providerStore.loadFeatureConfig()
-
-        guard let sttAssignment = feature.sttPrimary else {
-            panelController.viewModel.showResult("No STT model configured. Open Settings.")
-            panelController.resize(width: 400, height: 120)
-            settingsController.show()
-            return
-        }
-
-        // Try primary, then fallback
-        let (primaryText, primaryError) = await tryTranscribe(assignment: sttAssignment, audioURL: audioURL)
-        if let primaryText {
-            panelController.viewModel.showResult(primaryText)
-            panelController.resize(width: 400, height: 120)
-            return
-        }
-
-        if let fallback = feature.sttFallback {
-            let (fallbackText, _) = await tryTranscribe(assignment: fallback, audioURL: audioURL)
-            if let fallbackText {
-                panelController.viewModel.showResult(fallbackText)
-                panelController.resize(width: 400, height: 120)
-                return
+            let text = await transcribeForEditWindow(audioURL: audioURL)
+            await MainActor.run {
+                panelController.hide()
+                editController.showWithText(text) { [weak self] _ in
+                    self?.cleanupCurrentAudio()
+                }
             }
         }
-
-        panelController.viewModel.showResult(primaryError ?? "Transcription failed. Check Settings.")
-        panelController.resize(width: 400, height: 120)
     }
 
     private func tryTranscribe(assignment: ModelAssignment, audioURL: URL) async -> (String?, String?) {
@@ -345,41 +314,22 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func handlePanelAction(_ action: PanelAction) {
-        switch action {
-        case .insert(let text):
-            insertText(text)
-            cleanupCurrentAudio()
-        case .copy:
-            break // Already copied in PanelViewModel
-        case .clear, .cancel:
-            cleanupCurrentAudio()
-        }
-
-        panelController.hide()
+        cleanupCurrentAudio()
+        isRecording = false
     }
 
-    private func insertText(_ text: String) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
-
-        previousApp?.activate()
-
-        Task {
-            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
-            self.simulatePaste()
+    private func transcribeForEditWindow(audioURL: URL) async -> String {
+        let feature = providerStore.loadFeatureConfig()
+        guard let sttAssignment = feature.sttPrimary else {
+            return "Error: No STT model configured. Open Settings."
         }
-    }
-
-    private func simulatePaste() {
-        let source = CGEventSource(stateID: .combinedSessionState)
-
-        let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: true) // V key
-        keyDown?.flags = .maskCommand
-        let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: false)
-        keyUp?.flags = .maskCommand
-
-        keyDown?.post(tap: .cghidEventTap)
-        keyUp?.post(tap: .cghidEventTap)
+        let (primaryText, primaryError) = await tryTranscribe(assignment: sttAssignment, audioURL: audioURL)
+        if let primaryText { return primaryText }
+        if let fallback = feature.sttFallback {
+            let (fallbackText, _) = await tryTranscribe(assignment: fallback, audioURL: audioURL)
+            if let fallbackText { return fallbackText }
+        }
+        return primaryError ?? "Transcription failed. Check Settings."
     }
 
     private func cleanupCurrentAudio() {
