@@ -11,89 +11,101 @@ struct HotkeySettingsView: View {
 
     var body: some View {
         Form {
-            Section("Voice Input Activation") {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Activation Shortcut")
-                        .font(.headline)
+            Section("Shortcuts") {
+                VStack(spacing: 0) {
+                    // Activation Shortcut Row
+                    HStack(spacing: 16) {
+                        Text("Activation Shortcut")
+                            .font(.system(size: 13))
+                            .frame(width: 140, alignment: .leading)
 
-                    Text("Press and hold this shortcut to start recording voice. Release to transcribe.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        Spacer()
 
-                    HStack(spacing: 12) {
-                        ShortcutRecorderView(shortcut: $shortcut, onBeginRecording: {
-                            // Clear the old shortcut first to prevent it from activating during recording
-                            self.shortcut = nil
-                            // Save nil to defaults and notify to disable the old hotkey
-                            UserDefaults.standard.removeObject(forKey: "recordedShortcut")
-                            NotificationCenter.default.post(name: .hotkeyShortcutChanged, object: nil)
-                            // Then notify that recording has begun
-                            NotificationCenter.default.post(name: .hotkeyRecordingDidBegin, object: nil)
-                        })
-                            .frame(height: 36)
-                            .onChange(of: shortcut) { newValue in
-                                checkConflicts(for: newValue)
-                                newValue?.saveToDefaults()
-                                NotificationCenter.default.post(name: .hotkeyShortcutChanged, object: newValue)
-                            }
-
-                        if let warning = conflictWarning {
-                            HStack(spacing: 4) {
+                        HStack(spacing: 8) {
+                            if let warning = conflictWarning {
                                 Image(systemName: "exclamationmark.triangle")
-                                Text(warning)
+                                    .foregroundStyle(.orange)
+                                    .font(.caption)
+                                    .help(warning)
                             }
-                            .font(.caption)
-                            .foregroundStyle(.orange)
+
+                            ShortcutRecorderView(shortcut: $shortcut, onBeginRecording: {
+                                self.shortcut = nil
+                                UserDefaults.standard.removeObject(forKey: "recordedShortcut")
+                                NotificationCenter.default.post(name: .hotkeyShortcutChanged, object: nil)
+                                NotificationCenter.default.post(name: .hotkeyRecordingDidBegin, object: nil)
+                            })
+                                .frame(width: 140, height: 28)
+                                .onChange(of: shortcut) { newValue in
+                                    checkConflicts(for: newValue)
+                                    newValue?.saveToDefaults()
+                                    NotificationCenter.default.post(name: .hotkeyShortcutChanged, object: newValue)
+                                }
                         }
                     }
-                }
-                .padding(.vertical, 8)
-            }
+                    .padding(.vertical, 12)
 
-            Section("Edit Window Shortcuts") {
-                VStack(alignment: .leading, spacing: 16) {
-                    // Voice Record Shortcut
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Voice Record Shortcut")
-                            .font(.headline)
+                    Divider()
+                        .padding(.leading, 140)
 
-                        Text("Hold this shortcut in the Edit window to record voice for editing.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                    // Voice Record Shortcut Row
+                    HStack(spacing: 16) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Voice Record")
+                                .font(.system(size: 13))
 
-                        Picker("Record Shortcut", selection: $editRecordShortcut) {
+                            Text("Hold in Edit window")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(width: 140, alignment: .leading)
+
+                        Spacer()
+
+                        Picker("", selection: $editRecordShortcut) {
                             ForEach(EditWindowShortcut.allCases) { option in
                                 Text(option.displayName).tag(option)
                             }
                         }
                         .pickerStyle(.segmented)
+                        .frame(width: 140)
                         .onChange(of: editRecordShortcut) { newValue in
                             newValue.saveToDefaults()
                         }
                     }
+                    .padding(.vertical, 12)
 
                     Divider()
+                        .padding(.leading, 140)
 
-                    // Clear Shortcut
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Clear Shortcut")
-                            .font(.headline)
+                    // Clear Shortcut Row
+                    HStack(spacing: 16) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Clear Text")
+                                .font(.system(size: 13))
 
-                        Text("Press Escape to clear text in Edit window.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            Text(clearRequiresDoubleTap ? "Double-press Escape" : "Press Escape")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(width: 140, alignment: .leading)
 
-                        Toggle("Require double-press to clear", isOn: $clearRequiresDoubleTap)
+                        Spacer()
+
+                        Toggle("", isOn: $clearRequiresDoubleTap)
+                            .toggleStyle(.switch)
+                            .frame(width: 140, alignment: .trailing)
                             .onChange(of: clearRequiresDoubleTap) { newValue in
                                 UserDefaults.standard.set(newValue, forKey: "editClearDoubleTap")
                             }
                     }
+                    .padding(.vertical, 12)
                 }
-                .padding(.vertical, 8)
+                .padding(.horizontal, 16)
             }
         }
         .formStyle(.grouped)
-        .frame(minWidth: 400)
+        .frame(minWidth: 400, minHeight: 200)
     }
 
     private func checkConflicts(for shortcut: RecordedShortcut?) {
@@ -105,7 +117,6 @@ struct HotkeySettingsView: View {
         let flags = shortcut.flags
         let modifiers = flags.intersection([.maskCommand, .maskAlternate, .maskControl, .maskShift])
 
-        // Check for common system shortcuts
         let commonSystemShortcuts: [CGEventFlags] = [
             [.maskCommand, .maskShift, .maskAlternate],
             [.maskCommand, .maskControl],
