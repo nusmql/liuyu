@@ -147,4 +147,6 @@ public enum HotkeyError: Error, LocalizedError {
 
 extension Notification.Name {
     public static let hotkeyShortcutChanged = Notification.Name("hotkeyShortcutChanged")
+    public static let hotkeyRecordingDidBegin = Notification.Name("hotkeyRecordingDidBegin")
+    public static let hotkeyRecordingDidEnd = Notification.Name("hotkeyRecordingDidEnd")
 }

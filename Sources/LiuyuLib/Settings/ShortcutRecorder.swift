@@ -196,6 +196,7 @@ public class ShortcutRecorder: NSView {
         updateLabel()
         updateAppearance()
 
+        NotificationCenter.default.post(name: .hotkeyRecordingDidBegin, object: self)
         delegate?.shortcutRecorderDidBeginRecording(self)
 
         // Install local event monitor for key events
@@ -294,6 +295,7 @@ public class ShortcutRecorder: NSView {
             setShortcut(shortcut)
         }
 
+        NotificationCenter.default.post(name: .hotkeyRecordingDidEnd, object: self)
         delegate?.shortcutRecorder(self, didRecord: shortcut)
     }
 
@@ -304,6 +306,7 @@ public class ShortcutRecorder: NSView {
         updateLabel()
         updateAppearance()
 
+        NotificationCenter.default.post(name: .hotkeyRecordingDidEnd, object: self)
         delegate?.shortcutRecorder(self, didRecord: nil)
     }
 
