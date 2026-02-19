@@ -42,7 +42,13 @@ public class HotkeyManager {
     private var runLoopSource: CFRunLoopSource?
     private var isKeyDown = false
 
-    public var preset: HotkeyPreset = .rightOption
+    public var shortcut: RecordedShortcut = .default {
+        didSet {
+            // Restart tap with new shortcut immediately
+            stop()
+            try? start()
+        }
+    }
 
     public init() {}
 
@@ -104,16 +110,16 @@ public class HotkeyManager {
 
     private func handleEvent(_ event: CGEvent) -> Unmanaged<CGEvent>? {
         let flags = event.flags
-        let keycode = event.getIntegerValueField(.keyboardEventKeycode)
 
-        let flagMatch = flags.contains(preset.modifierFlag)
-        let keycodeMatch = preset.specificKeycode.map { $0 == keycode } ?? true
+        // Check if our configured modifiers are present
+        let targetFlags = shortcut.flags
+        let modifierMatch = flags.intersection(targetFlags) == targetFlags
 
-        if flagMatch && keycodeMatch && !isKeyDown {
+        if modifierMatch && !isKeyDown {
             isKeyDown = true
             events.send(.keyDown)
             return nil // suppress the event
-        } else if !flags.contains(preset.modifierFlag) && isKeyDown {
+        } else if !modifierMatch && isKeyDown {
             isKeyDown = false
             events.send(.keyUp)
             return nil // suppress the event

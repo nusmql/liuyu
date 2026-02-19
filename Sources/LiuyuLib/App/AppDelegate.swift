@@ -117,8 +117,9 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Hotkey
 
     private func applyHotkeyPreset() {
-        let presetRaw = UserDefaults.standard.string(forKey: "hotkeyPreset") ?? HotkeyPreset.rightOption.rawValue
-        hotkeyManager.preset = HotkeyPreset.from(rawValue: presetRaw)
+        // Load from new RecordedShortcut storage, fallback to legacy preset migration
+        let shortcut = RecordedShortcut.loadFromDefaults()
+        hotkeyManager.shortcut = shortcut
     }
 
     private func startHotkeyManager() {
