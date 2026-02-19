@@ -32,6 +32,10 @@ struct EditView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
         }
+        .modifier(ReturnKeyHandler(hasText: viewModel.hasText, onReturn: {
+            onInsert(viewModel.text)
+            onClose()
+        }))
     }
 
     // MARK: - Content Area
@@ -214,5 +218,33 @@ struct EditView: View {
             .controlSize(.regular)
             .disabled(!viewModel.hasText)
         }
+    }
+}
+
+// MARK: - Return Key Handler
+
+/// A view modifier that handles Return key press to trigger an action.
+private struct ReturnKeyHandler: ViewModifier {
+    let hasText: Bool
+    let onReturn: () -> Void
+
+    @State private var monitor: Any?
+
+    func body(content: Content) -> some View {
+        content
+            .onAppear {
+                monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+                    if event.keyCode == 36 && hasText { // Return key
+                        onReturn()
+                        return nil // Consume the event
+                    }
+                    return event
+                }
+            }
+            .onDisappear {
+                if let monitor = monitor {
+                    NSEvent.removeMonitor(monitor)
+                }
+            }
     }
 }

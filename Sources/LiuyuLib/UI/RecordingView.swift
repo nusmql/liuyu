@@ -10,7 +10,11 @@ struct RecordingView: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(nsImage: Lucide.mic)
+            Image(nsImage: {
+                let img = Lucide.mic.copy() as! NSImage
+                img.isTemplate = true
+                return img
+            }())
                 .resizable()
                 .frame(width: 20, height: 20)
                 .foregroundColor(.white)
