@@ -141,13 +141,14 @@ public class ShortcutRecorder: NSView {
 
     private func updateLabel() {
         if isRecording {
-            if currentFlags.isEmpty && currentKeyCode == 0 {
+            if currentFlags.isEmpty && currentKeyCode == 0 && !currentIncludesFnKey {
                 label.stringValue = "Press shortcut..."
                 label.textColor = .controlAccentColor
             } else {
                 let flagsStr = flagsDisplayString(currentFlags)
                 let keyStr = KeyCodeMap.string(for: currentKeyCode) ?? ""
-                label.stringValue = flagsStr + keyStr
+                let fnPrefix = currentIncludesFnKey ? "Fn " : ""
+                label.stringValue = fnPrefix + flagsStr + keyStr
                 label.textColor = .labelColor
             }
         } else {
@@ -217,13 +218,12 @@ public class ShortcutRecorder: NSView {
                     self.cancelRecording()
                 } else if event.keyCode == 36 { // Return key
                     self.finishRecording()
-                } else if event.keyCode == 63 { // Fn key
-                    // Capture Fn key specially
-                    self.currentIncludesFnKey = true
-                    self.updateLabel()
-                    self.finishRecording()
                 } else {
                     // Capture the key code along with modifiers
+                    // Also check if Fn is being held
+                    if event.modifierFlags.contains(.function) {
+                        self.currentIncludesFnKey = true
+                    }
                     self.currentKeyCode = event.keyCode
                     self.updateLabel()
                     self.finishRecording()
@@ -248,11 +248,11 @@ public class ShortcutRecorder: NSView {
                 DispatchQueue.main.async {
                     if event.keyCode == 53 { // Escape
                         self.cancelRecording()
-                    } else if event.keyCode == 63 { // Fn key
-                        self.currentIncludesFnKey = true
-                        self.updateLabel()
-                        self.finishRecording()
                     } else {
+                        // Check if Fn is being held during key press
+                        if event.modifierFlags.contains(.function) {
+                            self.currentIncludesFnKey = true
+                        }
                         self.currentKeyCode = event.keyCode
                         self.updateLabel()
                         self.finishRecording()
@@ -263,20 +263,28 @@ public class ShortcutRecorder: NSView {
     }
 
     private func handleFlagsChanged(_ event: NSEvent) {
-        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let flags = event.modifierFlags
+
+        // Check for Fn key
+        if flags.contains(.function) {
+            currentIncludesFnKey = true
+        }
+
+        // Get device-independent flags
+        let deviceFlags = flags.intersection(.deviceIndependentFlagsMask)
 
         // Convert NSEvent modifier flags to CGEventFlags
         var cgFlags: CGEventFlags = []
-        if flags.contains(.control) {
+        if deviceFlags.contains(.control) {
             cgFlags.insert(.maskControl)
         }
-        if flags.contains(.option) {
+        if deviceFlags.contains(.option) {
             cgFlags.insert(.maskAlternate)
         }
-        if flags.contains(.shift) {
+        if deviceFlags.contains(.shift) {
             cgFlags.insert(.maskShift)
         }
-        if flags.contains(.command) {
+        if deviceFlags.contains(.command) {
             cgFlags.insert(.maskCommand)
         }
 

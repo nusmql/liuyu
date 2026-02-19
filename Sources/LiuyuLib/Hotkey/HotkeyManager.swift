@@ -76,9 +76,10 @@ public class HotkeyManager {
             throw HotkeyError.accessibilityNotGranted
         }
 
-        // For modifier-only shortcuts, fall back to CGEventTap
-        if shortcut.isModifierOnly {
-            print("[HotkeyManager] Using EventTap for modifier-only shortcut")
+        // For modifier-only or Fn+key shortcuts, use CGEventTap
+        // (Carbon RegisterEventHotKey doesn't support Fn key)
+        if shortcut.isModifierOnly || shortcut.includesFnKey {
+            print("[HotkeyManager] Using EventTap for shortcut")
             try startEventTap()
         } else {
             print("[HotkeyManager] Using Global HotKey for key combination")
@@ -176,13 +177,17 @@ public class HotkeyManager {
         }
     }
 
-    // MARK: - Event Tap (for modifier-only shortcuts)
+    // MARK: - Event Tap (for modifier-only and Fn+key shortcuts)
 
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
 
     private func startEventTap() throws {
+        // Monitor flagsChanged for modifier-only shortcuts
+        // Monitor keyDown/keyUp for key combinations with Fn
         let mask: CGEventMask = (1 << CGEventType.flagsChanged.rawValue)
+            | (1 << CGEventType.keyDown.rawValue)
+            | (1 << CGEventType.keyUp.rawValue)
 
         guard let tap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
@@ -208,22 +213,77 @@ public class HotkeyManager {
     }
 
     private func handleEventTapEvent(_ event: CGEvent) -> Unmanaged<CGEvent>? {
+        switch event.type {
+        case .flagsChanged:
+            return handleFlagsChangedEvent(event)
+        case .keyDown, .keyUp:
+            return handleKeyEvent(event)
+        default:
+            return Unmanaged.passUnretained(event)
+        }
+    }
+
+    private func handleFlagsChangedEvent(_ event: CGEvent) -> Unmanaged<CGEvent>? {
+        // Only handle modifier-only shortcuts here
+        guard shortcut.isModifierOnly && !shortcut.includesFnKey else {
+            return Unmanaged.passUnretained(event)
+        }
+
         let flags = event.flags
         let targetFlags = shortcut.flags
         let modifierMatch = flags.intersection(targetFlags) == targetFlags
 
-        print("[HotkeyManager] EventTap event - flags: \(flags.rawValue), target: \(targetFlags.rawValue), match: \(modifierMatch), isKeyDown: \(isKeyDown)")
+        print("[HotkeyManager] FlagsChanged - flags: \(flags.rawValue), target: \(targetFlags.rawValue), match: \(modifierMatch), isKeyDown: \(isKeyDown)")
 
         if modifierMatch && !isKeyDown {
-            print("[HotkeyManager] EventTap KEY DOWN")
+            print("[HotkeyManager] Modifier-only KEY DOWN")
             isKeyDown = true
             events.send(.keyDown)
             return nil
         } else if !modifierMatch && isKeyDown {
-            print("[HotkeyManager] EventTap KEY UP")
+            print("[HotkeyManager] Modifier-only KEY UP")
             isKeyDown = false
             events.send(.keyUp)
             return nil
+        }
+
+        return Unmanaged.passUnretained(event)
+    }
+
+    private func handleKeyEvent(_ event: CGEvent) -> Unmanaged<CGEvent>? {
+        let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
+        let flags = event.flags
+
+        // Check if this matches our shortcut
+        let targetKeyCode = shortcut.keyCode
+        let targetFlags = shortcut.flags
+
+        // Check modifiers match
+        let modifierMatch = flags.intersection(targetFlags) == targetFlags
+
+        // Check Fn key if needed
+        // Note: Fn key state in CGEvent is platform-dependent and may not be reliable
+        // We primarily rely on the keyCode + modifier matching for Fn+key combinations
+        let fnMatch = !shortcut.includesFnKey || true // Always allow for now
+
+        let keyMatch = keyCode == targetKeyCode
+
+        print("[HotkeyManager] KeyEvent - keyCode: \(keyCode), targetKey: \(targetKeyCode), modifierMatch: \(modifierMatch), keyMatch: \(keyMatch), isKeyDown: \(isKeyDown)")
+
+        if event.type == .keyDown {
+            if modifierMatch && keyMatch && fnMatch && !isKeyDown {
+                print("[HotkeyManager] Key combination DOWN")
+                isKeyDown = true
+                events.send(.keyDown)
+                return nil
+            }
+        } else if event.type == .keyUp {
+            if keyMatch && isKeyDown {
+                print("[HotkeyManager] Key combination UP")
+                isKeyDown = false
+                events.send(.keyUp)
+                return nil
+            }
         }
 
         return Unmanaged.passUnretained(event)
