@@ -32,7 +32,8 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         panelController.setup()
         setupHotkeySubscription()
         setupPanelActions()
-        applyHotkeyPreset()
+        applyHotkeyShortcut()
+        setupHotkeyRefresh()
         startHotkeyManager()
 
         // Centralize activation policy: only go accessory when ALL windows are closed
@@ -116,10 +117,24 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Hotkey
 
-    private func applyHotkeyPreset() {
-        // Load from new RecordedShortcut storage, fallback to legacy preset migration
-        let shortcut = RecordedShortcut.loadFromDefaults()
-        hotkeyManager.shortcut = shortcut
+    private func migrateHotkeySettingsIfNeeded() {
+        guard UserDefaults.standard.object(forKey: "hotkeyPreset") != nil,
+              UserDefaults.standard.object(forKey: "recordedShortcut") == nil else {
+            return
+        }
+
+        let presetRaw = UserDefaults.standard.string(forKey: "hotkeyPreset") ?? "Right Option"
+        let preset = HotkeyPreset.from(rawValue: presetRaw)
+
+        let shortcut = RecordedShortcut.from(preset: preset)
+        shortcut.saveToDefaults()
+        UserDefaults.standard.removeObject(forKey: "hotkeyPreset")
+        print("[Liuyu] Migrated hotkey preset to new shortcut format")
+    }
+
+    private func applyHotkeyShortcut() {
+        migrateHotkeySettingsIfNeeded()
+        hotkeyManager.shortcut = RecordedShortcut.loadFromDefaults()
     }
 
     private func startHotkeyManager() {
@@ -152,6 +167,31 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
                 case .keyUp:
                     self.handleKeyUp()
                 }
+            }
+            .store(in: &cancellables)
+    }
+
+    private func setupHotkeyRefresh() {
+        NotificationCenter.default
+            .publisher(for: .hotkeyShortcutChanged)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] notification in
+                guard let shortcut = notification.object as? RecordedShortcut else { return }
+                self?.hotkeyManager.shortcut = shortcut
+            }
+            .store(in: &cancellables)
+
+        NotificationCenter.default
+            .publisher(for: .hotkeyRecordingDidBegin)
+            .sink { [weak self] _ in
+                self?.hotkeyManager.stop()
+            }
+            .store(in: &cancellables)
+
+        NotificationCenter.default
+            .publisher(for: .hotkeyRecordingDidEnd)
+            .sink { [weak self] _ in
+                try? self?.hotkeyManager.start()
             }
             .store(in: &cancellables)
     }
