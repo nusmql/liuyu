@@ -273,10 +273,15 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func stopRecordingAndTranscribe() {
-        guard isRecording else { return }
+        print("[App] stopRecordingAndTranscribe called, isRecording: \(isRecording)")
+        guard isRecording else {
+            print("[App] Not recording, returning")
+            return
+        }
         isRecording = false
 
         guard let audioURL = recordingController.stop() else {
+            print("[App] No audio recorded, hiding panel")
             panelController.hide()
             // Restart hotkey on error
             try? hotkeyManager.start()
@@ -284,16 +289,20 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         currentAudioFileURL = audioURL
+        print("[App] Stopped recording, showing processing")
         panelController.viewModel.showProcessing()
 
         Task {
             let text = await transcribeForEditWindow(audioURL: audioURL)
+            print("[App] Transcription complete: \(text.prefix(50))...")
             await MainActor.run {
                 // Hide panel immediately before opening Edit window
+                print("[App] Hiding panel before showing Edit window")
                 panelController.hide(immediately: true)
                 // Restart hotkey after transcription
                 try? self.hotkeyManager.start()
                 // Open Edit window after panel is hidden
+                print("[App] Opening Edit window")
                 self.editController.showWithText(text) { [weak self] _ in
                     self?.cleanupCurrentAudio()
                 }
