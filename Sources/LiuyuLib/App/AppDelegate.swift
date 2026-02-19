@@ -22,7 +22,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
     private let providerStore = ProviderConfigStore()
     private let minimumRecordingDuration: TimeInterval = 0.3
-    private let maximumRecordingDuration: TimeInterval = 60.0 // Failsafe: auto-stop after 60 seconds
+    private let maximumRecordingDuration: TimeInterval = 10.0 // Failsafe: auto-stop after 10 seconds
 
     public override init() { super.init() }
 
@@ -212,6 +212,16 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
                 if !self.hotkeyManager.isUsingEventTap {
                     try? self.hotkeyManager.start()
                 }
+            }
+            .store(in: &cancellables)
+
+        // Detect app deactivation during recording (user clicked elsewhere)
+        NotificationCenter.default
+            .publisher(for: NSApplication.didResignActiveNotification)
+            .sink { [weak self] _ in
+                guard let self, self.isRecording else { return }
+                print("[AppDelegate] App lost focus during recording - auto-stopping")
+                self.handleKeyUp()
             }
             .store(in: &cancellables)
     }
