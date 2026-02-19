@@ -19,6 +19,10 @@ class EditWindowController: NSObject, NSWindowDelegate {
     var onWindowClose: (() -> Void)?
 
     func show() {
+        showWithText("") { _ in }
+    }
+
+    func showWithText(_ text: String, onInsert: @escaping (String) -> Void) {
         if let window, window.isVisible {
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
@@ -49,8 +53,10 @@ class EditWindowController: NSObject, NSWindowDelegate {
         let capturedMouse = previousMouseLocation
         window.contentView = NSHostingView(
             rootView: EditView(
+                initialText: text,
                 onInsert: { [weak self] text in
                     self?.performInsert(text: text, app: capturedApp, mouseLocation: capturedMouse)
+                    onInsert(text)
                 },
                 onClose: { [weak self] in self?.close() }
             )
