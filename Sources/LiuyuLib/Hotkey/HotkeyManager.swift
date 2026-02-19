@@ -70,20 +70,26 @@ public class HotkeyManager {
     }
 
     public func start() throws {
+        print("[HotkeyManager] start() called, shortcut: \(shortcut.displayString)")
         guard Self.isAccessibilityGranted else {
+            print("[HotkeyManager] ERROR: Accessibility not granted")
             throw HotkeyError.accessibilityNotGranted
         }
 
         // For modifier-only shortcuts, fall back to CGEventTap
         if shortcut.isModifierOnly {
+            print("[HotkeyManager] Using EventTap for modifier-only shortcut")
             try startEventTap()
         } else {
+            print("[HotkeyManager] Using Global HotKey for key combination")
             try startGlobalHotKey()
         }
     }
 
     public func stop() {
+        print("[HotkeyManager] stop() called")
         if let hotKeyRef = hotKeyRef {
+            print("[HotkeyManager] Unregistering hotkey")
             UnregisterEventHotKey(hotKeyRef)
             self.hotKeyRef = nil
         }
@@ -93,6 +99,7 @@ public class HotkeyManager {
         eventHandlerInstalled = false
 
         isKeyDown = false
+        print("[HotkeyManager] stop() complete")
     }
 
     // MARK: - Global HotKey (for key combinations)
@@ -107,11 +114,14 @@ public class HotkeyManager {
             let manager = Unmanaged<HotkeyManager>.fromOpaque(userData).takeUnretainedValue()
 
             let eventKind = GetEventKind(event)
+            print("[HotkeyManager] Event received: \(eventKind)")
 
             switch eventKind {
             case UInt32(kEventHotKeyPressed):
+                print("[HotkeyManager] Hotkey PRESSED")
                 manager.events.send(.keyDown)
             case UInt32(kEventHotKeyReleased):
+                print("[HotkeyManager] Hotkey RELEASED")
                 manager.events.send(.keyUp)
             default:
                 break
@@ -190,11 +200,15 @@ public class HotkeyManager {
         let targetFlags = shortcut.flags
         let modifierMatch = flags.intersection(targetFlags) == targetFlags
 
+        print("[HotkeyManager] EventTap event - flags: \(flags.rawValue), target: \(targetFlags.rawValue), match: \(modifierMatch), isKeyDown: \(isKeyDown)")
+
         if modifierMatch && !isKeyDown {
+            print("[HotkeyManager] EventTap KEY DOWN")
             isKeyDown = true
             events.send(.keyDown)
             return nil
         } else if !modifierMatch && isKeyDown {
+            print("[HotkeyManager] EventTap KEY UP")
             isKeyDown = false
             events.send(.keyUp)
             return nil

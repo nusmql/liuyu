@@ -158,10 +158,12 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func setupHotkeySubscription() {
+        print("[AppDelegate] Setting up hotkey subscription")
         hotkeyManager.events
             .receive(on: DispatchQueue.main)
             .sink { [weak self] event in
                 guard let self else { return }
+                print("[AppDelegate] Hotkey event received: \(event), shortcut: \(self.hotkeyManager.shortcut.displayString), isModifierOnly: \(self.hotkeyManager.shortcut.isModifierOnly)")
                 if self.hotkeyManager.shortcut.isModifierOnly {
                     // Modifier-only: hold to record, release to stop
                     switch event {
@@ -215,8 +217,12 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Recording Flow
 
     private func handleKeyDown() {
+        print("[AppDelegate] handleKeyDown called, isRecording: \(isRecording)")
         // Prevent duplicate triggers
-        guard !isRecording else { return }
+        guard !isRecording else {
+            print("[AppDelegate] Already recording, ignoring")
+            return
+        }
 
         previousApp = NSWorkspace.shared.frontmostApplication
 
@@ -225,6 +231,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
         panelController.viewModel.showRecording()
         panelController.show()
+        print("[AppDelegate] Panel shown for recording")
 
         do {
             try recordingController.start()
@@ -247,8 +254,11 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func handleKeyUp() {
+        print("[AppDelegate] handleKeyUp called")
         let elapsed = Date().timeIntervalSince(recordingStartTime ?? Date())
+        print("[AppDelegate] Recording elapsed: \(elapsed)s")
         if elapsed < minimumRecordingDuration {
+            print("[AppDelegate] Recording too short, canceling")
             panelController.hide()
             isRecording = false
             cleanupCurrentAudio()
@@ -260,8 +270,12 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func handleToggle() {
+        print("[AppDelegate] handleToggle called, isRecording: \(isRecording)")
         // Debounce: prevent rapid toggles
-        guard Date().timeIntervalSince(recordingStartTime ?? Date(timeIntervalSince1970: 0)) > 0.1 else { return }
+        guard Date().timeIntervalSince(recordingStartTime ?? Date(timeIntervalSince1970: 0)) > 0.1 else {
+            print("[AppDelegate] Toggle debounced - too soon")
+            return
+        }
 
         if isRecording {
             // Stop recording
