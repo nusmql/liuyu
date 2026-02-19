@@ -268,13 +268,20 @@ public class HotkeyManager {
 
         let keyMatch = keyCode == targetKeyCode
 
-        print("[HotkeyManager] KeyEvent - keyCode: \(keyCode), targetKey: \(targetKeyCode), modifierMatch: \(modifierMatch), keyMatch: \(keyMatch), isKeyDown: \(isKeyDown)")
+        // Only log on state changes or non-matching keys to reduce log spam
+        let shouldLog = !keyMatch || !modifierMatch || (event.type == .keyDown && !isKeyDown) || (event.type == .keyUp && isKeyDown)
+        if shouldLog {
+            print("[HotkeyManager] KeyEvent - keyCode: \(keyCode), targetKey: \(targetKeyCode), modifierMatch: \(modifierMatch), keyMatch: \(keyMatch), isKeyDown: \(isKeyDown)")
+        }
 
         if event.type == .keyDown {
-            if modifierMatch && keyMatch && fnMatch && !isKeyDown {
-                print("[HotkeyManager] Key combination DOWN")
-                isKeyDown = true
-                events.send(.keyDown)
+            if modifierMatch && keyMatch && fnMatch {
+                if !isKeyDown {
+                    print("[HotkeyManager] Key combination DOWN")
+                    isKeyDown = true
+                    events.send(.keyDown)
+                }
+                // Always consume key events for our shortcut to prevent key repeat sounds
                 return nil
             }
         } else if event.type == .keyUp {
