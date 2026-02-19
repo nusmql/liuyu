@@ -2,15 +2,20 @@
 import Foundation
 import CoreGraphics
 
-/// A recorded shortcut that stores modifier flags for hotkey activation.
+/// A recorded shortcut that stores modifier flags and keycode for hotkey activation.
 public struct RecordedShortcut: Codable, Equatable, Sendable {
     /// The raw flag value for CGEventFlags.
     public let modifierFlags: CGEventFlags.RawValue
+    /// The keycode for the non-modifier key (0 if only modifiers).
+    public let keyCode: UInt16
 
-    /// Creates a new RecordedShortcut from CGEventFlags.
-    /// - Parameter flags: The CGEventFlags to store.
-    public init(flags: CGEventFlags) {
+    /// Creates a new RecordedShortcut from CGEventFlags and keycode.
+    /// - Parameters:
+    ///   - flags: The CGEventFlags to store.
+    ///   - keyCode: The keycode for the non-modifier key (default 0 for modifier-only).
+    public init(flags: CGEventFlags, keyCode: UInt16 = 0) {
         self.modifierFlags = flags.rawValue
+        self.keyCode = keyCode
     }
 
     /// Returns the CGEventFlags computed from the stored raw value.
@@ -18,35 +23,75 @@ public struct RecordedShortcut: Codable, Equatable, Sendable {
         CGEventFlags(rawValue: modifierFlags)
     }
 
-    /// Returns true if the shortcut has any modifier flags set.
+    /// Returns true if the shortcut has any modifier flags set or a keycode.
     public var isValid: Bool {
-        modifierFlags != 0
+        modifierFlags != 0 || keyCode != 0
+    }
+
+    /// Returns true if this is a modifier-only shortcut (no specific key).
+    public var isModifierOnly: Bool {
+        keyCode == 0
     }
 
     /// The default shortcut using Option key (maskAlternate).
     public static var `default`: RecordedShortcut {
-        RecordedShortcut(flags: .maskAlternate)
+        RecordedShortcut(flags: .maskAlternate, keyCode: 0)
     }
 
-    /// Returns a display string with modifier symbols (e.g., "⌃⌥⇧⌘").
+    /// Returns a display string with modifier symbols and key (e.g., "⌃⌥A").
     public var displayString: String {
-        var symbols: [String] = []
+        var parts: [String] = []
         let flags = self.flags
 
         if flags.contains(.maskControl) {
-            symbols.append("⌃")
+            parts.append("⌃")
         }
         if flags.contains(.maskAlternate) {
-            symbols.append("⌥")
+            parts.append("⌥")
         }
         if flags.contains(.maskShift) {
-            symbols.append("⇧")
+            parts.append("⇧")
         }
         if flags.contains(.maskCommand) {
-            symbols.append("⌘")
+            parts.append("⌘")
         }
 
-        return symbols.joined()
+        // Add the key character if not modifier-only
+        if keyCode != 0 {
+            if let char = KeyCodeMap.string(for: keyCode) {
+                parts.append(char.uppercased())
+            }
+        }
+
+        return parts.joined()
+    }
+}
+
+// MARK: - Key Code Mapping
+
+/// Maps key codes to their display strings
+public enum KeyCodeMap {
+    private static let map: [UInt16: String] = [
+        0: "A", 1: "S", 2: "D", 3: "F", 4: "H", 5: "G", 6: "Z", 7: "X",
+        8: "C", 9: "V", 10: "B", 11: "Q", 12: "W", 13: "E", 14: "R",
+        15: "Y", 16: "T", 17: "1", 18: "2", 19: "3", 20: "4", 21: "6",
+        22: "5", 23: "=", 24: "9", 25: "7", 26: "-", 27: "8", 28: "0",
+        29: "]", 30: "O", 31: "U", 32: "[", 33: "I", 34: "P", 35: "Return",
+        36: "L", 37: "J", 38: "'", 39: "K", 40: ";", 41: "\\", 42: ",",
+        43: "/", 44: "N", 45: "M", 46: ".", 47: "Tab", 48: "Space",
+        49: "`", 50: "Delete", 51: "Return", 52: "Escape", 53: "Escape",
+        96: "F5", 97: "F6", 98: "F7", 99: "F3", 100: "F8", 101: "F9",
+        103: "F11", 105: "F13", 106: "F16", 107: "F14", 109: "F10",
+        111: "F12", 113: "F15", 114: "Help", 115: "Home", 116: "PgUp",
+        117: "Delete", 118: "F4", 119: "End", 120: "F2", 121: "PgDn",
+        122: "F1", 123: "Left", 124: "Right", 125: "Down", 126: "Up",
+        0x52: "Keypad 0", 0x53: "Keypad 1", 0x54: "Keypad 2", 0x55: "Keypad 3",
+        0x56: "Keypad 4", 0x57: "Keypad 5", 0x58: "Keypad 6", 0x59: "Keypad 7",
+        0x5B: "Keypad 8", 0x5C: "Keypad 9"
+    ]
+
+    public static func string(for keyCode: UInt16) -> String? {
+        return map[keyCode]
     }
 }
 
@@ -57,7 +102,7 @@ public extension RecordedShortcut {
     /// - Parameter preset: The HotkeyPreset to migrate from.
     /// - Returns: A new RecordedShortcut with equivalent modifier flags.
     static func from(preset: HotkeyPreset) -> RecordedShortcut {
-        RecordedShortcut(flags: preset.modifierFlag)
+        RecordedShortcut(flags: preset.modifierFlag, keyCode: 0)
     }
 }
 

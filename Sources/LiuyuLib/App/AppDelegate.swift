@@ -17,6 +17,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     private var recordingStartTime: Date?
     private var currentAudioFileURL: URL?
     private var accessibilityPollTimer: Timer?
+    private var isRecording = false
 
     private let providerStore = ProviderConfigStore()
     private let minimumRecordingDuration: TimeInterval = 0.3
@@ -161,11 +162,22 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] event in
                 guard let self else { return }
-                switch event {
-                case .keyDown:
-                    self.handleKeyDown()
-                case .keyUp:
-                    self.handleKeyUp()
+                if self.hotkeyManager.shortcut.isModifierOnly {
+                    // Modifier-only: hold to record, release to stop
+                    switch event {
+                    case .keyDown:
+                        self.handleKeyDown()
+                    case .keyUp:
+                        self.handleKeyUp()
+                    }
+                } else {
+                    // Key combination: toggle mode
+                    switch event {
+                    case .keyDown:
+                        self.handleToggle()
+                    case .keyUp:
+                        break // Ignore keyUp for toggle mode
+                    }
                 }
             }
             .store(in: &cancellables)
@@ -207,8 +219,10 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             try recordingController.start()
             recordingStartTime = Date()
+            isRecording = true
         } catch {
             panelController.viewModel.showResult("Error: \(error.localizedDescription)")
+            isRecording = false
             return
         }
 
@@ -227,14 +241,29 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             let remaining = minimumRecordingDuration - elapsed
             Task {
                 try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
-                self.stopRecordingAndTranscribe()
+                await MainActor.run {
+                    self.stopRecordingAndTranscribe()
+                }
             }
         } else {
             stopRecordingAndTranscribe()
         }
     }
 
+    private func handleToggle() {
+        if isRecording {
+            // Stop recording
+            handleKeyUp()
+        } else {
+            // Start recording
+            handleKeyDown()
+        }
+    }
+
     private func stopRecordingAndTranscribe() {
+        guard isRecording else { return }
+        isRecording = false
+
         guard let audioURL = recordingController.stop() else {
             panelController.viewModel.showResult("Error: No audio recorded.")
             return

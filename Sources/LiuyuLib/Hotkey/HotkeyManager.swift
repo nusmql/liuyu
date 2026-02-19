@@ -3,6 +3,7 @@ import Foundation
 import Combine
 import CoreGraphics
 import AppKit
+import Carbon
 
 public enum HotkeyEvent {
     case keyDown
@@ -38,13 +39,14 @@ public enum HotkeyPreset: String, CaseIterable, Sendable {
 public class HotkeyManager {
     public let events = PassthroughSubject<HotkeyEvent, Never>()
 
-    private var eventTap: CFMachPort?
-    private var runLoopSource: CFRunLoopSource?
+    private var hotKeyRef: EventHotKeyRef?
+    private var eventHandlerUPP: EventHandlerUPP?
     private var isKeyDown = false
+    private var eventHandlerInstalled = false
 
     public var shortcut: RecordedShortcut = .default {
         didSet {
-            // Restart tap with new shortcut immediately
+            // Restart hotkey registration with new shortcut immediately
             stop()
             try? start()
         }
@@ -60,8 +62,6 @@ public class HotkeyManager {
     /// Prompt user for accessibility permission (shows system dialog). Returns true if already granted.
     @discardableResult
     public static func requestAccessibilityPermission(prompt: Bool = true) -> Bool {
-        // Use the string literal directly to avoid Swift 6 concurrency error
-        // with the global `kAXTrustedCheckOptionPrompt` variable.
         let options = ["AXTrustedCheckOptionPrompt": prompt] as CFDictionary
         return AXIsProcessTrustedWithOptions(options)
     }
@@ -71,6 +71,92 @@ public class HotkeyManager {
             throw HotkeyError.accessibilityNotGranted
         }
 
+        // For modifier-only shortcuts, fall back to CGEventTap
+        if shortcut.isModifierOnly {
+            try startEventTap()
+        } else {
+            try startGlobalHotKey()
+        }
+    }
+
+    public func stop() {
+        if let hotKeyRef = hotKeyRef {
+            UnregisterEventHotKey(hotKeyRef)
+            self.hotKeyRef = nil
+        }
+
+        // Note: Event handlers are not removed per-type in Carbon
+        // They persist until the app terminates
+        eventHandlerInstalled = false
+
+        isKeyDown = false
+    }
+
+    // MARK: - Global HotKey (for key combinations)
+
+    private func startGlobalHotKey() throws {
+        // Install event handler for hotkey events
+        let hotKeyPressedSpec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
+        let hotKeyReleasedSpec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyReleased))
+
+        eventHandlerUPP = { (handlerCallRef, event, userData) -> OSStatus in
+            guard let userData = userData else { return OSStatus(eventNotHandledErr) }
+            let manager = Unmanaged<HotkeyManager>.fromOpaque(userData).takeUnretainedValue()
+
+            let eventKind = GetEventKind(event)
+
+            switch eventKind {
+            case UInt32(kEventHotKeyPressed):
+                manager.events.send(.keyDown)
+            case UInt32(kEventHotKeyReleased):
+                manager.events.send(.keyUp)
+            default:
+                break
+            }
+
+            return noErr
+        }
+
+        // Register event handler
+        let handlerStatus = InstallEventHandler(
+            GetEventDispatcherTarget(),
+            eventHandlerUPP,
+            2,
+            [hotKeyPressedSpec, hotKeyReleasedSpec],
+            Unmanaged.passUnretained(self).toOpaque(),
+            nil
+        )
+
+        guard handlerStatus == noErr else {
+            throw HotkeyError.registrationFailed
+        }
+        eventHandlerInstalled = true
+
+        // Register the hotkey
+        let modifierFlags = carbonModifiers(from: shortcut.flags)
+        let keyCode = UInt32(shortcut.keyCode)
+
+        let hotKeyID = EventHotKeyID(signature: OSType(fourCharCode("LIUY")), id: 1)
+        let registerStatus = RegisterEventHotKey(
+            keyCode,
+            modifierFlags,
+            hotKeyID,
+            GetEventDispatcherTarget(),
+            0,
+            &hotKeyRef
+        )
+
+        guard registerStatus == noErr else {
+            throw HotkeyError.registrationFailed
+        }
+    }
+
+    // MARK: - Event Tap (for modifier-only shortcuts)
+
+    private var eventTap: CFMachPort?
+    private var runLoopSource: CFRunLoopSource?
+
+    private func startEventTap() throws {
         let mask: CGEventMask = (1 << CGEventType.flagsChanged.rawValue)
 
         guard let tap = CGEvent.tapCreate(
@@ -81,7 +167,7 @@ public class HotkeyManager {
             callback: { _, _, event, refcon -> Unmanaged<CGEvent>? in
                 guard let refcon else { return Unmanaged.passUnretained(event) }
                 let manager = Unmanaged<HotkeyManager>.fromOpaque(refcon).takeUnretainedValue()
-                return manager.handleEvent(event)
+                return manager.handleEventTapEvent(event)
             },
             userInfo: Unmanaged.passUnretained(self).toOpaque()
         ) else {
@@ -96,42 +182,44 @@ public class HotkeyManager {
         CGEvent.tapEnable(tap: tap, enable: true)
     }
 
-    public func stop() {
-        if let tap = eventTap {
-            CGEvent.tapEnable(tap: tap, enable: false)
-        }
-        if let source = runLoopSource {
-            CFRunLoopRemoveSource(CFRunLoopGetCurrent(), source, .commonModes)
-        }
-        eventTap = nil
-        runLoopSource = nil
-        isKeyDown = false
-    }
-
-    private func handleEvent(_ event: CGEvent) -> Unmanaged<CGEvent>? {
+    private func handleEventTapEvent(_ event: CGEvent) -> Unmanaged<CGEvent>? {
         let flags = event.flags
-
-        // Check if our configured modifiers are present
         let targetFlags = shortcut.flags
         let modifierMatch = flags.intersection(targetFlags) == targetFlags
 
         if modifierMatch && !isKeyDown {
             isKeyDown = true
             events.send(.keyDown)
-            return nil // suppress the event
+            return nil
         } else if !modifierMatch && isKeyDown {
             isKeyDown = false
             events.send(.keyUp)
-            return nil // suppress the event
+            return nil
         }
 
         return Unmanaged.passUnretained(event)
+    }
+
+    // MARK: - Helpers
+
+    private func carbonModifiers(from cgFlags: CGEventFlags) -> UInt32 {
+        var carbon: UInt32 = 0
+        if cgFlags.contains(.maskCommand) { carbon |= UInt32(cmdKey) }
+        if cgFlags.contains(.maskShift) { carbon |= UInt32(shiftKey) }
+        if cgFlags.contains(.maskAlternate) { carbon |= UInt32(optionKey) }
+        if cgFlags.contains(.maskControl) { carbon |= UInt32(controlKey) }
+        return carbon
+    }
+
+    private func fourCharCode(_ string: String) -> FourCharCode {
+        return string.utf16.reduce(0) { ($0 << 8) + UInt32($1) }
     }
 }
 
 public enum HotkeyError: Error, LocalizedError {
     case accessibilityNotGranted
     case tapCreationFailed
+    case registrationFailed
 
     public var errorDescription: String? {
         switch self {
@@ -139,6 +227,8 @@ public enum HotkeyError: Error, LocalizedError {
             return "Accessibility permission required. Grant access in System Settings > Privacy & Security > Accessibility."
         case .tapCreationFailed:
             return "Failed to create event tap. Restart the app and try again."
+        case .registrationFailed:
+            return "Failed to register global hotkey. The shortcut may be in use by another application."
         }
     }
 }

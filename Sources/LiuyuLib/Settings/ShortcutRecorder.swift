@@ -23,6 +23,7 @@ public class ShortcutRecorder: NSView {
     private var isRecording = false
     private var localMonitor: Any?
     private var currentFlags: CGEventFlags = []
+    private var currentKeyCode: UInt16 = 0
 
     private let label: NSTextField
     private let clearButton: NSButton
@@ -139,11 +140,13 @@ public class ShortcutRecorder: NSView {
 
     private func updateLabel() {
         if isRecording {
-            if currentFlags.isEmpty {
-                label.stringValue = "Press modifiers..."
+            if currentFlags.isEmpty && currentKeyCode == 0 {
+                label.stringValue = "Press shortcut..."
                 label.textColor = .controlAccentColor
             } else {
-                label.stringValue = flagsDisplayString(currentFlags)
+                let flagsStr = flagsDisplayString(currentFlags)
+                let keyStr = KeyCodeMap.string(for: currentKeyCode) ?? ""
+                label.stringValue = flagsStr + keyStr
                 label.textColor = .labelColor
             }
         } else {
@@ -214,7 +217,9 @@ public class ShortcutRecorder: NSView {
                 } else if event.keyCode == 36 { // Return key
                     self.finishRecording()
                 } else {
-                    // Any other key press with current modifiers confirms the shortcut
+                    // Capture the key code along with modifiers
+                    self.currentKeyCode = event.keyCode
+                    self.updateLabel()
                     self.finishRecording()
                 }
                 return nil // Consume the event
@@ -238,6 +243,8 @@ public class ShortcutRecorder: NSView {
                     if event.keyCode == 53 { // Escape
                         self.cancelRecording()
                     } else {
+                        self.currentKeyCode = event.keyCode
+                        self.updateLabel()
                         self.finishRecording()
                     }
                 }
@@ -283,10 +290,10 @@ public class ShortcutRecorder: NSView {
         guard isRecording else { return }
 
         let shortcut: RecordedShortcut?
-        if currentFlags.isEmpty {
+        if currentFlags.isEmpty && currentKeyCode == 0 {
             shortcut = nil
         } else {
-            shortcut = RecordedShortcut(flags: currentFlags)
+            shortcut = RecordedShortcut(flags: currentFlags, keyCode: currentKeyCode)
         }
 
         cleanupRecording()
@@ -313,6 +320,7 @@ public class ShortcutRecorder: NSView {
     private func cleanupRecording() {
         isRecording = false
         currentFlags = []
+        currentKeyCode = 0
 
         if let monitor = localMonitor {
             NSEvent.removeMonitor(monitor)
