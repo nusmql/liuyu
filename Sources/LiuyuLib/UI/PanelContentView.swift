@@ -11,13 +11,6 @@ struct PanelContentView: View {
             RecordingView(audioLevel: audioLevel, onClose: viewModel.cancel)
         case .processing:
             ProcessingView()
-        case .result(let text):
-            ResultView(
-                text: text,
-                onInsert: viewModel.insertText,
-                onCopy: viewModel.copyText,
-                onClear: viewModel.clearResult
-            )
         }
     }
 }
