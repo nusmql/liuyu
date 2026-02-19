@@ -44,6 +44,14 @@ public class HotkeyManager {
     private var isKeyDown = false
     private var eventHandlerInstalled = false
 
+    /// Returns true if currently using EventTap (for modifier-only or Fn+key shortcuts)
+    public var isUsingEventTap: Bool {
+        eventTap != nil
+    }
+
+    /// Set to true during recording to prevent keyDown re-triggering
+    public var isRecording = false
+
     public var shortcut: RecordedShortcut = .default {
         didSet {
             // Restart hotkey registration with new shortcut immediately
@@ -262,31 +270,33 @@ public class HotkeyManager {
         let modifierMatch = flags.intersection(targetFlags) == targetFlags
 
         // Check Fn key if needed
-        // CGEvent uses .maskSecondaryFn for Fn key detection
         let fnKeyPressed = flags.contains(.maskSecondaryFn)
         let fnMatch = shortcut.includesFnKey == fnKeyPressed
 
         let keyMatch = keyCode == targetKeyCode
 
-        // Only log on state changes or non-matching keys to reduce log spam
-        let shouldLog = !keyMatch || !modifierMatch || (event.type == .keyDown && !isKeyDown) || (event.type == .keyUp && isKeyDown)
-        if shouldLog {
-            print("[HotkeyManager] KeyEvent - keyCode: \(keyCode), targetKey: \(targetKeyCode), modifierMatch: \(modifierMatch), keyMatch: \(keyMatch), isKeyDown: \(isKeyDown)")
-        }
+        // Debug logging
+        print("[HotkeyManager] \(event.type == .keyDown ? "keyDown" : "keyUp") - keyCode: \(keyCode), target: \(targetKeyCode), modMatch: \(modifierMatch), fnMatch: \(fnMatch), isKeyDown: \(isKeyDown)")
 
         if event.type == .keyDown {
             if modifierMatch && keyMatch && fnMatch {
+                // Don't re-trigger if already recording (for EventTap-based shortcuts)
+                if isRecording {
+                    print("[HotkeyManager] KeyDown ignored - already recording")
+                    return nil
+                }
                 if !isKeyDown {
-                    print("[HotkeyManager] Key combination DOWN")
+                    print("[HotkeyManager] Key combination DOWN -> sending event")
                     isKeyDown = true
                     events.send(.keyDown)
                 }
-                // Always consume key events for our shortcut to prevent key repeat sounds
                 return nil
             }
         } else if event.type == .keyUp {
+            // On keyUp, only check if the key matches and we were in keyDown state
+            // Don't check modifiers - user may have released them before the key
             if keyMatch && isKeyDown {
-                print("[HotkeyManager] Key combination UP")
+                print("[HotkeyManager] Key combination UP -> sending event")
                 isKeyDown = false
                 events.send(.keyUp)
                 return nil

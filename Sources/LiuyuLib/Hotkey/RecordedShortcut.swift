@@ -154,12 +154,12 @@ public extension RecordedShortcut {
     private static let editRecordDefaultsKey = "editRecordShortcut"
 
     /// The default edit record shortcut: Cmd+R
-    public static var defaultEditRecordShortcut: RecordedShortcut {
+    static var defaultEditRecordShortcut: RecordedShortcut {
         RecordedShortcut(flags: .maskCommand, keyCode: 15, includesFnKey: false) // Cmd+R
     }
 
     /// Loads the edit record shortcut from UserDefaults, or returns Cmd+R if none exists.
-    public static func loadEditRecordShortcut() -> RecordedShortcut {
+    static func loadEditRecordShortcut() -> RecordedShortcut {
         guard let data = UserDefaults.standard.data(forKey: editRecordDefaultsKey) else {
             return .defaultEditRecordShortcut
         }
@@ -173,7 +173,7 @@ public extension RecordedShortcut {
     }
 
     /// Saves this RecordedShortcut as the edit record shortcut.
-    public func saveEditRecordShortcut() {
+    func saveEditRecordShortcut() {
         do {
             let data = try JSONEncoder().encode(self)
             UserDefaults.standard.set(data, forKey: Self.editRecordDefaultsKey)

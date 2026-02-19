@@ -18,9 +18,11 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     private var currentAudioFileURL: URL?
     private var accessibilityPollTimer: Timer?
     private var isRecording = false
+    private var recordingFailsafeTimer: Timer?
 
     private let providerStore = ProviderConfigStore()
     private let minimumRecordingDuration: TimeInterval = 0.3
+    private let maximumRecordingDuration: TimeInterval = 60.0 // Failsafe: auto-stop after 60 seconds
 
     public override init() { super.init() }
 
@@ -192,14 +194,24 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         NotificationCenter.default
             .publisher(for: .hotkeyRecordingDidBegin)
             .sink { [weak self] _ in
-                self?.hotkeyManager.stop()
+                // For Carbon-based hotkeys, we need to stop during recording to prevent re-triggering
+                // For EventTap-based hotkeys (modifier-only or Fn+key), we must keep it running
+                // to capture the keyUp event that stops recording
+                guard let self else { return }
+                if !self.hotkeyManager.isUsingEventTap {
+                    self.hotkeyManager.stop()
+                }
             }
             .store(in: &cancellables)
 
         NotificationCenter.default
             .publisher(for: .hotkeyRecordingDidEnd)
             .sink { [weak self] _ in
-                try? self?.hotkeyManager.start()
+                guard let self else { return }
+                // Only restart if we stopped it (Carbon-based shortcuts)
+                if !self.hotkeyManager.isUsingEventTap {
+                    try? self.hotkeyManager.start()
+                }
             }
             .store(in: &cancellables)
     }
@@ -224,9 +236,19 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             try recordingController.start()
             recordingStartTime = Date()
             isRecording = true
+            // Set flag in hotkeyManager for EventTap-based shortcuts
+            hotkeyManager.isRecording = true
+            // Setup failsafe timer - auto-stop if keyUp is missed
+            recordingFailsafeTimer = Timer.scheduledTimer(withTimeInterval: maximumRecordingDuration, repeats: false) { [weak self] _ in
+                Task { @MainActor in
+                    print("[AppDelegate] Failsafe timer triggered - auto-stopping recording")
+                    self?.handleKeyUp()
+                }
+            }
         } catch {
             panelController.hide()
             isRecording = false
+            hotkeyManager.isRecording = false
             // Restart hotkey on error
             try? hotkeyManager.start()
             return
@@ -244,10 +266,16 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         print("[AppDelegate] handleKeyUp called")
         let elapsed = Date().timeIntervalSince(recordingStartTime ?? Date())
         print("[AppDelegate] Recording elapsed: \(elapsed)s")
+
+        // Always reset state and invalidate failsafe timer
+        recordingFailsafeTimer?.invalidate()
+        recordingFailsafeTimer = nil
+
         if elapsed < minimumRecordingDuration {
             print("[AppDelegate] Recording too short, canceling")
             panelController.hide()
             isRecording = false
+            hotkeyManager.isRecording = false
             cleanupCurrentAudio()
             // Restart hotkey after short recording
             try? hotkeyManager.start()
@@ -280,6 +308,11 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         isRecording = false
+        hotkeyManager.isRecording = false
+
+        // Invalidate the failsafe timer
+        recordingFailsafeTimer?.invalidate()
+        recordingFailsafeTimer = nil
 
         guard let audioURL = recordingController.stop() else {
             print("[App] No audio recorded, hiding panel")
