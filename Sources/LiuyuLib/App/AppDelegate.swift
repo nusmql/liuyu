@@ -215,7 +215,13 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Recording Flow
 
     private func handleKeyDown() {
+        // Prevent duplicate triggers
+        guard !isRecording else { return }
+
         previousApp = NSWorkspace.shared.frontmostApplication
+
+        // Stop hotkey to prevent interference during recording
+        hotkeyManager.stop()
 
         panelController.viewModel.showRecording()
         panelController.show()
@@ -227,6 +233,8 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         } catch {
             panelController.hide()
             isRecording = false
+            // Restart hotkey on error
+            try? hotkeyManager.start()
             return
         }
 
@@ -244,12 +252,17 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             panelController.hide()
             isRecording = false
             cleanupCurrentAudio()
+            // Restart hotkey after short recording
+            try? hotkeyManager.start()
             return
         }
         stopRecordingAndTranscribe()
     }
 
     private func handleToggle() {
+        // Debounce: prevent rapid toggles
+        guard Date().timeIntervalSince(recordingStartTime ?? Date(timeIntervalSince1970: 0)) > 0.1 else { return }
+
         if isRecording {
             // Stop recording
             handleKeyUp()
@@ -275,6 +288,8 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             let text = await transcribeForEditWindow(audioURL: audioURL)
             await MainActor.run {
                 panelController.hide()
+                // Restart hotkey after transcription
+                try? self.hotkeyManager.start()
                 editController.showWithText(text) { [weak self] _ in
                     self?.cleanupCurrentAudio()
                 }

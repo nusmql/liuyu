@@ -23,10 +23,28 @@ public class FloatingPanelController {
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
 
+        // Support light/dark mode theme changes
+        panel.appearance = NSAppearance(named: .aqua)
+
+        // Observe theme changes
+        DistributedNotificationCenter.default().addObserver(
+            self,
+            selector: #selector(themeChanged),
+            name: Notification.Name("AppleInterfaceThemeChangedNotification"),
+            object: nil
+        )
+
         let hostingView = NSHostingView(rootView: PanelContentView(viewModel: viewModel))
         panel.contentView = hostingView
 
         self.panel = panel
+    }
+
+    @objc private func themeChanged() {
+        // Update appearance based on current system theme
+        guard let panel = panel else { return }
+        let currentName = NSApp.effectiveAppearance.name
+        panel.appearance = NSAppearance(named: currentName == .darkAqua ? .darkAqua : .aqua)
     }
 
     public func show() {
