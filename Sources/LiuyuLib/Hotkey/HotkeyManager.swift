@@ -94,6 +94,18 @@ public class HotkeyManager {
             self.hotKeyRef = nil
         }
 
+        // Disable and clean up EventTap
+        if let tap = eventTap {
+            print("[HotkeyManager] Disabling EventTap")
+            CGEvent.tapEnable(tap: tap, enable: false)
+            self.eventTap = nil
+        }
+        if let source = runLoopSource {
+            print("[HotkeyManager] Removing runloop source")
+            CFRunLoopRemoveSource(CFRunLoopGetCurrent(), source, .commonModes)
+            self.runLoopSource = nil
+        }
+
         // Note: Event handlers are not removed per-type in Carbon
         // They persist until the app terminates
         eventHandlerInstalled = false

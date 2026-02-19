@@ -226,9 +226,6 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
         previousApp = NSWorkspace.shared.frontmostApplication
 
-        // Stop hotkey to prevent interference during recording
-        hotkeyManager.stop()
-
         panelController.viewModel.showRecording()
         panelController.show()
         print("[AppDelegate] Panel shown for recording")
