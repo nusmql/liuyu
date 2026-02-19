@@ -3,11 +3,23 @@ import SwiftUI
 import LucideIcons
 
 struct EditView: View {
-    @StateObject private var viewModel = EditViewModel()
+    @StateObject private var viewModel: EditViewModel
     @State private var waveformLevels: [Float] = Array(repeating: 0, count: 7)
 
+    let initialText: String
     let onInsert: (String) -> Void
     let onClose: () -> Void
+
+    init(initialText: String = "", onInsert: @escaping (String) -> Void, onClose: @escaping () -> Void) {
+        self.initialText = initialText
+        self.onInsert = onInsert
+        self.onClose = onClose
+        _viewModel = StateObject(wrappedValue: {
+            let vm = EditViewModel()
+            vm.text = initialText
+            return vm
+        }())
+    }
 
     var body: some View {
         VStack(spacing: 0) {
