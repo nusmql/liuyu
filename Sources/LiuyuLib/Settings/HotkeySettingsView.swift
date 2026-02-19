@@ -17,10 +17,15 @@ struct HotkeySettingsView: View {
                         .foregroundStyle(.secondary)
 
                     HStack(spacing: 12) {
-                        ShortcutRecorderView(shortcut: $shortcut)
+                        ShortcutRecorderView(shortcut: $shortcut, onBeginRecording: {
+                            // Synchronously stop the global hotkey before recording
+                            NotificationCenter.default.post(name: .hotkeyRecordingDidBegin, object: nil)
+                        })
                             .frame(height: 36)
                             .onChange(of: shortcut) { newValue in
                                 checkConflicts(for: newValue)
+                                newValue?.saveToDefaults()
+                                NotificationCenter.default.post(name: .hotkeyShortcutChanged, object: newValue)
                             }
 
                         if let warning = conflictWarning {
