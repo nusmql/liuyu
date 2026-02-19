@@ -5,6 +5,10 @@ struct HotkeySettingsView: View {
     @State private var shortcut: RecordedShortcut? = RecordedShortcut.loadFromDefaults()
     @State private var conflictWarning: String? = nil
 
+    // Edit window shortcuts
+    @State private var editRecordShortcut: EditWindowShortcut = .loadEditRecordShortcut()
+    @State private var clearRequiresDoubleTap: Bool = UserDefaults.standard.bool(forKey: "editClearDoubleTap")
+
     var body: some View {
         Form {
             Section("Voice Input Activation") {
@@ -41,6 +45,48 @@ struct HotkeySettingsView: View {
                             .font(.caption)
                             .foregroundStyle(.orange)
                         }
+                    }
+                }
+                .padding(.vertical, 8)
+            }
+
+            Section("Edit Window Shortcuts") {
+                VStack(alignment: .leading, spacing: 16) {
+                    // Voice Record Shortcut
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Voice Record Shortcut")
+                            .font(.headline)
+
+                        Text("Hold this shortcut in the Edit window to record voice for editing.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        Picker("Record Shortcut", selection: $editRecordShortcut) {
+                            ForEach(EditWindowShortcut.allCases) { option in
+                                Text(option.displayName).tag(option)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .onChange(of: editRecordShortcut) { newValue in
+                            newValue.saveToDefaults()
+                        }
+                    }
+
+                    Divider()
+
+                    // Clear Shortcut
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Clear Shortcut")
+                            .font(.headline)
+
+                        Text("Press Escape to clear text in Edit window.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        Toggle("Require double-press to clear", isOn: $clearRequiresDoubleTap)
+                            .onChange(of: clearRequiresDoubleTap) { newValue in
+                                UserDefaults.standard.set(newValue, forKey: "editClearDoubleTap")
+                            }
                     }
                 }
                 .padding(.vertical, 8)

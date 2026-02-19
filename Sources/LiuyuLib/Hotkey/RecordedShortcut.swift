@@ -1,6 +1,7 @@
 // Sources/LiuyuLib/Hotkey/RecordedShortcut.swift
 import Foundation
 import CoreGraphics
+import AppKit
 
 /// A recorded shortcut that stores modifier flags, keycode, and fn key state for hotkey activation.
 public struct RecordedShortcut: Codable, Equatable, Sendable {
@@ -146,5 +147,58 @@ public extension RecordedShortcut {
         } catch {
             // Silently fail - the shortcut will revert to default on next load
         }
+    }
+}
+
+// MARK: - Edit Window Shortcuts
+
+/// Predefined shortcuts for Edit window voice recording.
+public enum EditWindowShortcut: String, CaseIterable, Identifiable, Sendable {
+    case commandR = "cmdR"
+    case commandShiftR = "cmdShiftR"
+    case optionR = "optR"
+    case controlR = "ctrlR"
+
+    public var id: String { rawValue }
+
+    public var displayName: String {
+        switch self {
+        case .commandR: return "⌘R"
+        case .commandShiftR: return "⌘⇧R"
+        case .optionR: return "⌥R"
+        case .controlR: return "⌃R"
+        }
+    }
+
+    /// Returns the key code for 'R' (15)
+    public var keyCode: UInt16 { 15 }
+
+    /// Returns the required modifier flags
+    public var modifierFlags: NSEvent.ModifierFlags {
+        switch self {
+        case .commandR: return .command
+        case .commandShiftR: return [.command, .shift]
+        case .optionR: return .option
+        case .controlR: return .control
+        }
+    }
+
+    /// Checks if an event matches this shortcut
+    public func matches(_ event: NSEvent) -> Bool {
+        event.keyCode == keyCode &&
+        event.modifierFlags.intersection(.deviceIndependentFlagsMask) == modifierFlags
+    }
+
+    // MARK: - Persistence
+
+    private static let defaultsKey = "editRecordShortcut"
+
+    public static func loadEditRecordShortcut() -> EditWindowShortcut {
+        let rawValue = UserDefaults.standard.string(forKey: defaultsKey) ?? ""
+        return EditWindowShortcut(rawValue: rawValue) ?? .commandR
+    }
+
+    public func saveToDefaults() {
+        UserDefaults.standard.set(rawValue, forKey: Self.defaultsKey)
     }
 }

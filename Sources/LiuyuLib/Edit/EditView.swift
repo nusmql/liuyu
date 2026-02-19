@@ -180,6 +180,13 @@ struct EditView: View {
         .padding(.vertical, 20)
     }
 
+    // MARK: - Helpers
+
+    private var clearButtonLabel: String {
+        let requiresDoubleTap = UserDefaults.standard.bool(forKey: "editClearDoubleTap")
+        return requiresDoubleTap ? "Clear (Esc x2)" : "Clear (Esc)"
+    }
+
     // MARK: - Action Bar
 
     private var actionBar: some View {
@@ -188,7 +195,7 @@ struct EditView: View {
 
             Button(action: { viewModel.clear() }) {
                 Label {
-                    Text("Clear (Esc)")
+                    Text(clearButtonLabel)
                 } icon: {
                     Image(nsImage: Lucide.trash2)
                         .resizable()
@@ -247,6 +254,11 @@ private struct EditViewKeyboardHandler: ViewModifier {
 
     @State private var keyMonitor: Any?
     @State private var isRecordingViaShortcut = false
+    @State private var lastEscapePressTime: Date?
+
+    // Load settings
+    private var recordShortcut: EditWindowShortcut { .loadEditRecordShortcut() }
+    private var clearRequiresDoubleTap: Bool { UserDefaults.standard.bool(forKey: "editClearDoubleTap") }
 
     func body(content: Content) -> some View {
         content
@@ -258,15 +270,16 @@ private struct EditViewKeyboardHandler: ViewModifier {
                         return nil
                     }
 
-                    // Escape key (53) - Clear text
+                    // Escape key (53) - Clear text (with optional double-tap)
                     if event.keyCode == 53 {
-                        onEscape()
-                        return nil
+                        if self.handleEscapeKey() {
+                            return nil
+                        }
+                        return event
                     }
 
-                    // Cmd+R (for "Record/Redo") - Hold to record, release to stop
-                    // keyCode 15 = R, modifierFlags contains .command
-                    if event.keyCode == 15 && event.modifierFlags.contains(.command) {
+                    // Voice record shortcut - Hold to record, release to stop
+                    if recordShortcut.matches(event) {
                         if event.type == .keyDown && !isRecordingViaShortcut {
                             // Only start if currently idle
                             if case .idle = editState {
@@ -288,5 +301,26 @@ private struct EditViewKeyboardHandler: ViewModifier {
                     NSEvent.removeMonitor(monitor)
                 }
             }
+    }
+
+    /// Handles Escape key press, considering double-tap setting.
+    /// Returns true if the key should be consumed, false otherwise.
+    private func handleEscapeKey() -> Bool {
+        let now = Date()
+        defer { lastEscapePressTime = now }
+
+        if clearRequiresDoubleTap {
+            // Check if this is a double-tap (within 0.3 seconds)
+            if let lastPress = lastEscapePressTime, now.timeIntervalSince(lastPress) < 0.3 {
+                onEscape()
+                return true
+            }
+            // Single tap - don't clear, but consume the event
+            return true
+        } else {
+            // Single tap clears
+            onEscape()
+            return true
+        }
     }
 }
