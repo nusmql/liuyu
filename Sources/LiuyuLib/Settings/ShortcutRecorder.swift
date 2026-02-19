@@ -24,6 +24,7 @@ public class ShortcutRecorder: NSView {
     private var localMonitor: Any?
     private var currentFlags: CGEventFlags = []
     private var currentKeyCode: UInt16 = 0
+    private var currentIncludesFnKey: Bool = false
 
     private let label: NSTextField
     private let clearButton: NSButton
@@ -216,6 +217,11 @@ public class ShortcutRecorder: NSView {
                     self.cancelRecording()
                 } else if event.keyCode == 36 { // Return key
                     self.finishRecording()
+                } else if event.keyCode == 63 { // Fn key
+                    // Capture Fn key specially
+                    self.currentIncludesFnKey = true
+                    self.updateLabel()
+                    self.finishRecording()
                 } else {
                     // Capture the key code along with modifiers
                     self.currentKeyCode = event.keyCode
@@ -242,6 +248,10 @@ public class ShortcutRecorder: NSView {
                 DispatchQueue.main.async {
                     if event.keyCode == 53 { // Escape
                         self.cancelRecording()
+                    } else if event.keyCode == 63 { // Fn key
+                        self.currentIncludesFnKey = true
+                        self.updateLabel()
+                        self.finishRecording()
                     } else {
                         self.currentKeyCode = event.keyCode
                         self.updateLabel()
@@ -290,10 +300,10 @@ public class ShortcutRecorder: NSView {
         guard isRecording else { return }
 
         let shortcut: RecordedShortcut?
-        if currentFlags.isEmpty && currentKeyCode == 0 {
+        if currentFlags.isEmpty && currentKeyCode == 0 && !currentIncludesFnKey {
             shortcut = nil
         } else {
-            shortcut = RecordedShortcut(flags: currentFlags, keyCode: currentKeyCode)
+            shortcut = RecordedShortcut(flags: currentFlags, keyCode: currentKeyCode, includesFnKey: currentIncludesFnKey)
         }
 
         cleanupRecording()
@@ -323,6 +333,7 @@ public class ShortcutRecorder: NSView {
         isRecording = false
         currentFlags = []
         currentKeyCode = 0
+        currentIncludesFnKey = false
 
         if let monitor = localMonitor {
             NSEvent.removeMonitor(monitor)

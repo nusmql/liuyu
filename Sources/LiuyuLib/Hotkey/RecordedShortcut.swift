@@ -2,20 +2,24 @@
 import Foundation
 import CoreGraphics
 
-/// A recorded shortcut that stores modifier flags and keycode for hotkey activation.
+/// A recorded shortcut that stores modifier flags, keycode, and fn key state for hotkey activation.
 public struct RecordedShortcut: Codable, Equatable, Sendable {
     /// The raw flag value for CGEventFlags.
     public let modifierFlags: CGEventFlags.RawValue
     /// The keycode for the non-modifier key (0 if only modifiers).
     public let keyCode: UInt16
+    /// Whether the Fn key is part of the shortcut.
+    public let includesFnKey: Bool
 
-    /// Creates a new RecordedShortcut from CGEventFlags and keycode.
+    /// Creates a new RecordedShortcut from CGEventFlags, keycode, and fn key state.
     /// - Parameters:
     ///   - flags: The CGEventFlags to store.
     ///   - keyCode: The keycode for the non-modifier key (default 0 for modifier-only).
-    public init(flags: CGEventFlags, keyCode: UInt16 = 0) {
+    ///   - includesFnKey: Whether the Fn key is part of the shortcut.
+    public init(flags: CGEventFlags, keyCode: UInt16 = 0, includesFnKey: Bool = false) {
         self.modifierFlags = flags.rawValue
         self.keyCode = keyCode
+        self.includesFnKey = includesFnKey
     }
 
     /// Returns the CGEventFlags computed from the stored raw value.
@@ -30,17 +34,23 @@ public struct RecordedShortcut: Codable, Equatable, Sendable {
 
     /// Returns true if this is a modifier-only shortcut (no specific key).
     public var isModifierOnly: Bool {
-        keyCode == 0
+        keyCode == 0 && !includesFnKey
     }
 
     /// The default shortcut using Option key (maskAlternate).
     public static var `default`: RecordedShortcut {
-        RecordedShortcut(flags: .maskAlternate, keyCode: 0)
+        RecordedShortcut(flags: .maskAlternate, keyCode: 0, includesFnKey: false)
     }
 
-    /// Returns a display string with modifier symbols and key (e.g., "⌃⌥A").
+    /// Returns a display string with modifier symbols and key (e.g., "⌃⌥A" or "Fn ⌥").
     public var displayString: String {
         var parts: [String] = []
+
+        // Add Fn key first if present
+        if includesFnKey {
+            parts.append("Fn")
+        }
+
         let flags = self.flags
 
         if flags.contains(.maskControl) {
@@ -63,7 +73,7 @@ public struct RecordedShortcut: Codable, Equatable, Sendable {
             }
         }
 
-        return parts.joined()
+        return parts.joined(separator: " ")
     }
 }
 
@@ -87,7 +97,8 @@ public enum KeyCodeMap {
         122: "F1", 123: "Left", 124: "Right", 125: "Down", 126: "Up",
         0x52: "Keypad 0", 0x53: "Keypad 1", 0x54: "Keypad 2", 0x55: "Keypad 3",
         0x56: "Keypad 4", 0x57: "Keypad 5", 0x58: "Keypad 6", 0x59: "Keypad 7",
-        0x5B: "Keypad 8", 0x5C: "Keypad 9"
+        0x5B: "Keypad 8", 0x5C: "Keypad 9",
+        63: "Fn"  // Left Fn key on Mac keyboards
     ]
 
     public static func string(for keyCode: UInt16) -> String? {
@@ -102,7 +113,7 @@ public extension RecordedShortcut {
     /// - Parameter preset: The HotkeyPreset to migrate from.
     /// - Returns: A new RecordedShortcut with equivalent modifier flags.
     static func from(preset: HotkeyPreset) -> RecordedShortcut {
-        RecordedShortcut(flags: preset.modifierFlag, keyCode: 0)
+        RecordedShortcut(flags: preset.modifierFlag, keyCode: 0, includesFnKey: false)
     }
 }
 
