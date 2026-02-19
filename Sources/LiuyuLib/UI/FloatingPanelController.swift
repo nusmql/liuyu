@@ -58,8 +58,16 @@ public class FloatingPanelController {
         }
     }
 
-    public func hide() {
+    public func hide(immediately: Bool = false) {
         guard let panel else { return }
+
+        if immediately {
+            // Hide immediately without animation
+            panel.alphaValue = 0
+            panel.orderOut(nil)
+            return
+        }
+
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = 0.15
             panel.animator().alphaValue = 0

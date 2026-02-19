@@ -278,6 +278,8 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
         guard let audioURL = recordingController.stop() else {
             panelController.hide()
+            // Restart hotkey on error
+            try? hotkeyManager.start()
             return
         }
 
@@ -287,10 +289,12 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         Task {
             let text = await transcribeForEditWindow(audioURL: audioURL)
             await MainActor.run {
-                panelController.hide()
+                // Hide panel immediately before opening Edit window
+                panelController.hide(immediately: true)
                 // Restart hotkey after transcription
                 try? self.hotkeyManager.start()
-                editController.showWithText(text) { [weak self] _ in
+                // Open Edit window after panel is hidden
+                self.editController.showWithText(text) { [weak self] _ in
                     self?.cleanupCurrentAudio()
                 }
             }
