@@ -9,9 +9,6 @@ public enum PanelState {
 }
 
 public enum PanelAction {
-    case insert(String)
-    case copy(String)
-    case clear
     case cancel
 }
 
