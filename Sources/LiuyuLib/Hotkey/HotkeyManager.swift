@@ -142,3 +142,9 @@ public enum HotkeyError: Error, LocalizedError {
         }
     }
 }
+
+// MARK: - Notifications
+
+extension Notification.Name {
+    public static let hotkeyShortcutChanged = Notification.Name("hotkeyShortcutChanged")
+}
