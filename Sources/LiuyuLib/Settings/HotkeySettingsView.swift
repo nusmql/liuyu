@@ -9,7 +9,7 @@ struct HotkeySettingsView: View {
     @State private var editRecordShortcut: RecordedShortcut? = RecordedShortcut.loadEditRecordShortcut()
     @State private var editRecordConflictWarning: String? = nil
     @State private var clearRequiresDoubleTap: Bool = UserDefaults.standard.bool(forKey: "editClearDoubleTap")
-    @State private var recordingTimeout: RecordingTimeoutOption = RecordingTimeoutOption.loadFromDefaults()
+    @State private var silenceTimeout: SilenceTimeoutOption = SilenceTimeoutOption.loadFromDefaults()
 
     var body: some View {
         Form {
@@ -113,13 +113,13 @@ struct HotkeySettingsView: View {
                     Divider()
                         .padding(.leading, 140)
 
-                    // Recording Timeout Row
+                    // Silence Timeout Row
                     HStack(spacing: 16) {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("Recording Limit")
+                            Text("Silence Timeout")
                                 .font(.system(size: 13))
 
-                            Text("Auto-stop after silence")
+                            Text("Auto-stop when silent")
                                 .font(.system(size: 11))
                                 .foregroundStyle(.secondary)
                         }
@@ -127,15 +127,15 @@ struct HotkeySettingsView: View {
 
                         Spacer()
 
-                        Picker("", selection: $recordingTimeout) {
-                            ForEach(RecordingTimeoutOption.allCases) { option in
+                        Picker("", selection: $silenceTimeout) {
+                            ForEach(SilenceTimeoutOption.allCases) { option in
                                 Text(option.displayName).tag(option)
                             }
                         }
                         .pickerStyle(.segmented)
                         .frame(width: 140)
-                        .onChange(of: recordingTimeout) { newValue in
-                            UserDefaults.standard.set(newValue.rawValue, forKey: "maximumRecordingDuration")
+                        .onChange(of: silenceTimeout) { newValue in
+                            UserDefaults.standard.set(newValue.rawValue, forKey: "silenceTimeout")
                         }
                     }
                     .padding(.vertical, 12)
@@ -192,22 +192,22 @@ struct HotkeySettingsView: View {
     }
 }
 
-// MARK: - Recording Timeout Options
+// MARK: - Silence Timeout Options
 
-enum RecordingTimeoutOption: Int, CaseIterable, Identifiable {
-    case short = 10      // 10 seconds
-    case medium = 30     // 30 seconds
-    case long = 60       // 60 seconds
-    case unlimited = 0   // No limit (0 means disabled)
+enum SilenceTimeoutOption: Int, CaseIterable, Identifiable {
+    case threeSeconds = 3
+    case fiveSeconds = 5
+    case tenSeconds = 10
+    case disabled = 0   // 0 means disabled
 
     var id: Int { rawValue }
 
     var displayName: String {
         switch self {
-        case .short: return "10s"
-        case .medium: return "30s"
-        case .long: return "60s"
-        case .unlimited: return "∞"
+        case .threeSeconds: return "3s"
+        case .fiveSeconds: return "5s"
+        case .tenSeconds: return "10s"
+        case .disabled: return "Off"
         }
     }
 
@@ -215,8 +215,8 @@ enum RecordingTimeoutOption: Int, CaseIterable, Identifiable {
         TimeInterval(rawValue)
     }
 
-    static func loadFromDefaults() -> RecordingTimeoutOption {
-        let savedValue = UserDefaults.standard.integer(forKey: "maximumRecordingDuration")
-        return RecordingTimeoutOption(rawValue: savedValue) ?? .medium
+    static func loadFromDefaults() -> SilenceTimeoutOption {
+        let savedValue = UserDefaults.standard.integer(forKey: "silenceTimeout")
+        return SilenceTimeoutOption(rawValue: savedValue) ?? .fiveSeconds
     }
 }

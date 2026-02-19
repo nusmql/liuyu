@@ -22,12 +22,12 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
     private let providerStore = ProviderConfigStore()
     private let minimumRecordingDuration: TimeInterval = 0.3
-    private var maximumRecordingDuration: TimeInterval? {
-        let saved = UserDefaults.standard.integer(forKey: "maximumRecordingDuration")
-        // 0 means unlimited (nil), otherwise return the seconds
-        return saved > 0 ? TimeInterval(saved) : nil
+    /// Silence timeout: auto-stop when no audio activity for this duration (seconds)
+    private var silenceTimeout: TimeInterval {
+        let saved = UserDefaults.standard.integer(forKey: "silenceTimeout")
+        // Default 5 seconds, 0 means disabled
+        return saved > 0 ? TimeInterval(saved) : 5.0
     }
-    private var audioActivityCheckTimer: Timer?
 
     public override init() { super.init() }
 
@@ -253,9 +253,10 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             isRecording = true
             // Set flag in hotkeyManager for EventTap-based shortcuts
             hotkeyManager.isRecording = true
-            // Setup smart timeout timer - checks audio activity
-            if let maxDuration = maximumRecordingDuration {
-                recordingFailsafeTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            // Setup silence detection timer
+            let timeout = silenceTimeout
+            if timeout > 0 {
+                recordingFailsafeTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
                     Task { @MainActor in
                         guard let self = self else {
                             return
@@ -265,11 +266,16 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
                             self.recordingFailsafeTimer = nil
                             return
                         }
-                        let elapsed = Date().timeIntervalSince(self.recordingStartTime ?? Date())
-                        // If exceeded max duration and no recent audio activity, stop
-                        if elapsed >= maxDuration && !self.recordingController.hasRecentAudioActivity {
-                            print("[AppDelegate] Smart timeout: exceeded \(Int(maxDuration))s with no audio activity")
-                            self.handleKeyUp()
+                        // Check if no audio activity for the configured timeout period
+                        if !self.recordingController.hasRecentAudioActivity {
+                            // Get time since last activity
+                            if let lastActivity = self.recordingController.lastAudioActivityTime {
+                                let silenceDuration = Date().timeIntervalSince(lastActivity)
+                                if silenceDuration >= timeout {
+                                    print("[AppDelegate] Silence timeout: no audio for \(Int(silenceDuration))s, auto-stopping")
+                                    self.handleKeyUp()
+                                }
+                            }
                         }
                     }
                 }

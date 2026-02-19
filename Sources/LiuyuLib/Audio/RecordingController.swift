@@ -20,7 +20,7 @@ public class RecordingController: ObservableObject {
     /// Threshold for detecting speech activity (normalized 0-1)
     private let speechThreshold: Float = 0.15
     /// Time of last audio activity above threshold
-    private var lastAudioActivityTime: Date?
+    public private(set) var lastAudioActivityTime: Date?
     /// Whether there has been recent audio activity
     public var hasRecentAudioActivity: Bool {
         guard let lastTime = lastAudioActivityTime else { return false }
