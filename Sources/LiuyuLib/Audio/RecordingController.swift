@@ -17,6 +17,17 @@ public class RecordingController: ObservableObject {
     // Thread-safe state shared with the audio render thread
     fileprivate let audioState = AudioState()
 
+    /// Threshold for detecting speech activity (normalized 0-1)
+    private let speechThreshold: Float = 0.15
+    /// Time of last audio activity above threshold
+    private var lastAudioActivityTime: Date?
+    /// Whether there has been recent audio activity
+    public var hasRecentAudioActivity: Bool {
+        guard let lastTime = lastAudioActivityTime else { return false }
+        // Consider active if audio detected within last 2 seconds
+        return Date().timeIntervalSince(lastTime) < 2.0
+    }
+
     public init() {
         // Re-warm the engine when the audio device changes (e.g. user switches mic).
         // The tap format must match the new hardware format.
@@ -157,6 +168,9 @@ public class RecordingController: ObservableObject {
         // Atomically flush pre-roll buffers to file and start recording
         audioState.startRecording(audioFile: audioFile)
 
+        // Reset audio activity tracking
+        lastAudioActivityTime = Date()
+
         self.tempFileURL = tempURL
     }
 
@@ -225,6 +239,10 @@ public class RecordingController: ObservableObject {
         if audioState.isRecording {
             Task { @MainActor [weak self] in
                 self?.audioLevel = normalized
+                // Track audio activity for smart timeout
+                if normalized > (self?.speechThreshold ?? 0.15) {
+                    self?.lastAudioActivityTime = Date()
+                }
             }
         }
 

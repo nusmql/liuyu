@@ -9,6 +9,7 @@ struct HotkeySettingsView: View {
     @State private var editRecordShortcut: RecordedShortcut? = RecordedShortcut.loadEditRecordShortcut()
     @State private var editRecordConflictWarning: String? = nil
     @State private var clearRequiresDoubleTap: Bool = UserDefaults.standard.bool(forKey: "editClearDoubleTap")
+    @State private var recordingTimeout: RecordingTimeoutOption = RecordingTimeoutOption.loadFromDefaults()
 
     var body: some View {
         Form {
@@ -108,6 +109,36 @@ struct HotkeySettingsView: View {
                             }
                     }
                     .padding(.vertical, 12)
+
+                    Divider()
+                        .padding(.leading, 140)
+
+                    // Recording Timeout Row
+                    HStack(spacing: 16) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Recording Limit")
+                                .font(.system(size: 13))
+
+                            Text("Auto-stop after silence")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(width: 140, alignment: .leading)
+
+                        Spacer()
+
+                        Picker("", selection: $recordingTimeout) {
+                            ForEach(RecordingTimeoutOption.allCases) { option in
+                                Text(option.displayName).tag(option)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(width: 140)
+                        .onChange(of: recordingTimeout) { newValue in
+                            UserDefaults.standard.set(newValue.rawValue, forKey: "maximumRecordingDuration")
+                        }
+                    }
+                    .padding(.vertical, 12)
                 }
                 .padding(.horizontal, 16)
             }
@@ -158,5 +189,34 @@ struct HotkeySettingsView: View {
         } else {
             editRecordConflictWarning = nil
         }
+    }
+}
+
+// MARK: - Recording Timeout Options
+
+enum RecordingTimeoutOption: Int, CaseIterable, Identifiable {
+    case short = 10      // 10 seconds
+    case medium = 30     // 30 seconds
+    case long = 60       // 60 seconds
+    case unlimited = 0   // No limit (0 means disabled)
+
+    var id: Int { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .short: return "10s"
+        case .medium: return "30s"
+        case .long: return "60s"
+        case .unlimited: return "∞"
+        }
+    }
+
+    var duration: TimeInterval {
+        TimeInterval(rawValue)
+    }
+
+    static func loadFromDefaults() -> RecordingTimeoutOption {
+        let savedValue = UserDefaults.standard.integer(forKey: "maximumRecordingDuration")
+        return RecordingTimeoutOption(rawValue: savedValue) ?? .medium
     }
 }
