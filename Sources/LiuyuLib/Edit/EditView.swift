@@ -343,6 +343,10 @@ private struct EditViewKeyboardHandler: ViewModifier {
         if flags.contains(.maskAlternate) { shortcutModifiers.insert(.option) }
         if flags.contains(.maskControl) { shortcutModifiers.insert(.control) }
 
-        return eventModifiers == shortcutModifiers
+        // Check Fn key if needed
+        let fnKeyPressed = event.modifierFlags.contains(.function)
+        let fnMatch = shortcut.includesFnKey == fnKeyPressed
+
+        return eventModifiers == shortcutModifiers && fnMatch
     }
 }
