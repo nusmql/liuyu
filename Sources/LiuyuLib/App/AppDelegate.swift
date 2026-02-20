@@ -100,8 +100,8 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = statusItem.button {
-            // Try to load custom icon, fall back to SF Symbol if not found
-            if let customImage = NSImage(named: "MenuIcon_18") ?? NSImage(named: "MenuIcon") {
+            // Load custom icon from Resources directory
+            if let customImage = loadMenuIcon() {
                 customImage.isTemplate = true  // Allows macOS to recolor for dark/light mode
                 button.image = customImage
             } else {
@@ -115,6 +115,32 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit Liuyu", action: #selector(quitApp), keyEquivalent: "q"))
         statusItem.menu = menu
+    }
+
+    private func loadMenuIcon() -> NSImage? {
+        // Try multiple possible locations for the menu icon
+        let possiblePaths: [URL] = [
+            // App bundle Resources (production)
+            Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/MenuIcon_18.png"),
+            Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/MenuIcon_18@2x.png"),
+            Bundle.main.resourceURL?.appendingPathComponent("MenuIcon_18.png"),
+            Bundle.main.resourceURL?.appendingPathComponent("MenuIcon_18@2x.png"),
+            // Source directory (development)
+            URL(fileURLWithPath: "/Users/lei/dev/src/github/liuyu/Sources/LiuyuLib/Resources/MenuIcon_18.png"),
+            URL(fileURLWithPath: "/Users/lei/dev/src/github/liuyu/Sources/LiuyuLib/Resources/MenuIcon_18@2x.png"),
+        ].compactMap { $0 }
+
+        for path in possiblePaths {
+            if FileManager.default.fileExists(atPath: path.path),
+               let image = NSImage(contentsOf: path) {
+                // Set appropriate size for status bar
+                let screenScale = NSScreen.main?.backingScaleFactor ?? 1.0
+                let size: CGFloat = 18.0
+                image.size = NSSize(width: size / screenScale, height: size / screenScale)
+                return image
+            }
+        }
+        return nil
     }
 
     @objc private func openEdit() {
