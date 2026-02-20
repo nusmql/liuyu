@@ -161,26 +161,13 @@ struct EditView: View {
         .padding(.vertical, 8)
     }
 
+    // WeChat-style recording view: mic with pulsing circles behind
     private var waveformView: some View {
-        HStack(spacing: 3) {
-            ForEach(0..<7, id: \.self) { index in
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(Color.red.opacity(0.7))
-                    .frame(width: 4, height: CGFloat(8 + waveformLevels[index] * 32))
-                    .animation(.easeInOut(duration: 0.08), value: waveformLevels[index])
-            }
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 20)
-    }
-
-    // Processing view with animated progress ring around mic icon
-    private func processingView(text: String) -> some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 8) {
             ZStack {
-                // Progress ring
-                ProgressRing()
-                    .frame(width: 50, height: 50)
+                // Pulsing background circles (like WeChat voice input)
+                PulsingCircles(audioLevel: viewModel.audioLevel)
+                    .frame(width: 80, height: 80)
 
                 // Mic icon
                 Image(nsImage: {
@@ -189,12 +176,39 @@ struct EditView: View {
                     return img
                 }())
                 .resizable()
-                .frame(width: 20, height: 20)
-                .foregroundStyle(.secondary)
+                .frame(width: 28, height: 28)
+                .foregroundColor(.white)
+            }
+
+            Text("Release to send")
+                .foregroundColor(.secondary)
+                .font(.system(size: 12))
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 16)
+    }
+
+    // Processing view with rotating arc around mic icon (like WeChat)
+    private func processingView(text: String) -> some View {
+        VStack(spacing: 12) {
+            ZStack {
+                // Rotating arc
+                RotatingArc()
+                    .frame(width: 56, height: 56)
+
+                // Mic icon
+                Image(nsImage: {
+                    let img = Lucide.mic.copy() as! NSImage
+                    img.isTemplate = true
+                    return img
+                }())
+                .resizable()
+                .frame(width: 24, height: 24)
+                .foregroundColor(.white)
             }
 
             Text(text)
-                .foregroundStyle(.secondary)
+                .foregroundColor(.secondary)
                 .font(.system(size: 13))
         }
         .frame(maxWidth: .infinity)
@@ -262,29 +276,58 @@ struct EditView: View {
     }
 }
 
-// Progress ring animation component
-private struct ProgressRing: View {
+// MARK: - WeChat Style Animations
+
+// Pulsing circles behind mic (like WeChat voice input)
+private struct PulsingCircles: View {
+    let audioLevel: Float
+    @State private var pulse1: Bool = false
+    @State private var pulse2: Bool = false
+
+    var body: some View {
+        ZStack {
+            // Outer circle
+            Circle()
+                .fill(Color.weChatGreen.opacity(0.15))
+                .scaleEffect(pulse1 ? 1.5 : 1.0)
+                .opacity(pulse1 ? 0 : 1)
+
+            // Middle circle
+            Circle()
+                .fill(Color.weChatGreen.opacity(0.25))
+                .scaleEffect(pulse2 ? 1.3 : 0.8)
+                .opacity(pulse2 ? 0.3 : 0.8)
+
+            // Inner solid circle (mic background)
+            Circle()
+                .fill(Color.weChatGreen)
+                .frame(width: 56, height: 56)
+        }
+        .onAppear {
+            withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: false)) {
+                pulse1 = true
+            }
+            withAnimation(.easeInOut(duration: 1.2).delay(0.4).repeatForever(autoreverses: false)) {
+                pulse2 = true
+            }
+        }
+        .onChange(of: audioLevel) { _ in
+            // Animation intensity could be adjusted based on audio level
+        }
+    }
+}
+
+// Rotating arc for processing state (like WeChat when sending)
+private struct RotatingArc: View {
     @State private var rotation: Double = 0
 
     var body: some View {
         Circle()
-            .stroke(
-                AngularGradient(
-                    colors: [
-                        .gray.opacity(0.2),
-                        .gray.opacity(0.6),
-                        .gray.opacity(0.2)
-                    ],
-                    center: .center,
-                    angle: .degrees(rotation)
-                ),
-                lineWidth: 3
-            )
+            .trim(from: 0, to: 0.75)
+            .stroke(Color.weChatGreen, lineWidth: 3)
+            .rotationEffect(.degrees(rotation))
             .onAppear {
-                withAnimation(
-                    .linear(duration: 1.5)
-                    .repeatForever(autoreverses: false)
-                ) {
+                withAnimation(.linear(duration: 1.0).repeatForever(autoreverses: false)) {
                     rotation = 360
                 }
             }

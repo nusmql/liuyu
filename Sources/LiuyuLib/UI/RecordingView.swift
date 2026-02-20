@@ -5,27 +5,51 @@ struct RecordingView: View {
     let audioLevel: Float
     let onClose: () -> Void
 
-    @State private var levels: [Float] = Array(repeating: 0, count: 7)
-    @Environment(\.colorScheme) private var colorScheme
+    @State private var pulse1: Bool = false
+    @State private var pulse2: Bool = false
 
     var body: some View {
-        HStack(spacing: 12) {
-            Image(nsImage: {
-                let img = Lucide.mic.copy() as! NSImage
-                img.isTemplate = true
-                return img
-            }())
-                .resizable()
-                .frame(width: 20, height: 20)
-                .foregroundColor(.white)
+        HStack(spacing: 16) {
+            // WeChat-style mic with pulsing circles
+            ZStack {
+                // Outer pulsing circle
+                Circle()
+                    .fill(Color.weChatGreen.opacity(0.2))
+                    .frame(width: 50, height: 50)
+                    .scaleEffect(pulse1 ? 1.4 : 1.0)
+                    .opacity(pulse1 ? 0 : 0.6)
 
-            HStack(spacing: 3) {
-                ForEach(0..<7, id: \.self) { index in
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(Color.white.opacity(0.8))
-                        .frame(width: 4, height: CGFloat(8 + levels[index] * 32))
-                        .animation(.easeInOut(duration: 0.08), value: levels[index])
-                }
+                // Middle pulsing circle
+                Circle()
+                    .fill(Color.weChatGreen.opacity(0.3))
+                    .frame(width: 40, height: 40)
+                    .scaleEffect(pulse2 ? 1.2 : 0.9)
+                    .opacity(pulse2 ? 0.3 : 0.8)
+
+                // Inner solid circle with mic
+                Circle()
+                    .fill(Color.weChatGreen)
+                    .frame(width: 36, height: 36)
+
+                Image(nsImage: {
+                    let img = Lucide.mic.copy() as! NSImage
+                    img.isTemplate = true
+                    return img
+                }())
+                    .resizable()
+                    .frame(width: 16, height: 16)
+                    .foregroundColor(.white)
+            }
+            .frame(width: 50, height: 50)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Recording...")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(.white)
+
+                Text("Release to send")
+                    .font(.system(size: 11))
+                    .foregroundColor(.white.opacity(0.7))
             }
 
             Spacer()
@@ -36,7 +60,7 @@ struct RecordingView: View {
                 Image(nsImage: Lucide.x)
                     .resizable()
                     .frame(width: 14, height: 14)
-                    .foregroundColor(.white)
+                    .foregroundColor(.white.opacity(0.8))
             }
             .buttonStyle(.plain)
         }
@@ -45,11 +69,15 @@ struct RecordingView: View {
         .frame(width: 280, height: 80)
         .background(
             RoundedRectangle(cornerRadius: 16)
-                .fill(Color.black.opacity(colorScheme == .dark ? 0.6 : 0.4))
+                .fill(Color.black.opacity(0.75))
         )
-        .onChange(of: audioLevel) { newValue in
-            levels.removeFirst()
-            levels.append(newValue)
+        .onAppear {
+            withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: false)) {
+                pulse1 = true
+            }
+            withAnimation(.easeInOut(duration: 1.2).delay(0.4).repeatForever(autoreverses: false)) {
+                pulse2 = true
+            }
         }
     }
 }
