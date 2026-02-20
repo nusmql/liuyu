@@ -47,13 +47,13 @@ class EditWindowController: NSObject, NSWindowDelegate {
 
         let isNew = (window == nil)
         let window = self.window ?? NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 500, height: 200),
+            contentRect: NSRect(x: 0, y: 0, width: 500, height: 300),
             styleMask: [.titled, .closable, .resizable],
             backing: .buffered,
             defer: false
         )
         window.title = "LiuYu"
-        window.minSize = NSSize(width: 400, height: 150)
+        window.minSize = NSSize(width: 400, height: 200)
         if isNew { window.center() }
 
         // Always set fresh content so previous text doesn't linger

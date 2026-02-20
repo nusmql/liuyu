@@ -49,19 +49,3 @@ public struct KeychainHelper: Sendable {
         }
     }
 }
-
-public enum KeychainError: Error, LocalizedError {
-    case encodingFailed
-    case saveFailed(OSStatus)
-    case readFailed(OSStatus)
-    case deleteFailed(OSStatus)
-
-    public var errorDescription: String? {
-        switch self {
-        case .encodingFailed: return "Failed to encode value"
-        case .saveFailed(let s): return "Key storage save failed: \(s)"
-        case .readFailed(let s): return "Key storage read failed: \(s)"
-        case .deleteFailed(let s): return "Key storage delete failed: \(s)"
-        }
-    }
-}

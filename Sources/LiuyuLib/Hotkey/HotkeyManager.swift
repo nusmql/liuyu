@@ -10,32 +10,6 @@ public enum HotkeyEvent {
     case keyUp
 }
 
-public enum HotkeyPreset: String, CaseIterable, Sendable {
-    case optionKey = "Option Key"
-    case rightOption = "Right Option"
-    case rightCommand = "Right Command"
-
-    public var modifierFlag: CGEventFlags {
-        switch self {
-        case .optionKey, .rightOption: return .maskAlternate
-        case .rightCommand: return .maskCommand
-        }
-    }
-
-    /// If set, only this specific keycode triggers the hotkey (for left/right distinction).
-    public var specificKeycode: Int64? {
-        switch self {
-        case .optionKey: return nil
-        case .rightOption: return 0x3D   // Right Option
-        case .rightCommand: return 0x36  // Right Command
-        }
-    }
-
-    public static func from(rawValue: String) -> HotkeyPreset {
-        HotkeyPreset(rawValue: rawValue) ?? .rightOption
-    }
-}
-
 public class HotkeyManager {
     public let events = PassthroughSubject<HotkeyEvent, Never>()
 

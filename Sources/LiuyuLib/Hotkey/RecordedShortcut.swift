@@ -107,17 +107,6 @@ public enum KeyCodeMap {
     }
 }
 
-// MARK: - Migration Support
-
-public extension RecordedShortcut {
-    /// Creates a RecordedShortcut from an existing HotkeyPreset.
-    /// - Parameter preset: The HotkeyPreset to migrate from.
-    /// - Returns: A new RecordedShortcut with equivalent modifier flags.
-    static func from(preset: HotkeyPreset) -> RecordedShortcut {
-        RecordedShortcut(flags: preset.modifierFlag, keyCode: 0, includesFnKey: false)
-    }
-}
-
 // MARK: - UserDefaults Persistence
 
 public extension RecordedShortcut {
@@ -180,58 +169,5 @@ public extension RecordedShortcut {
         } catch {
             // Silently fail
         }
-    }
-}
-
-// MARK: - Edit Window Shortcuts
-
-/// Predefined shortcuts for Edit window voice recording.
-public enum EditWindowShortcut: String, CaseIterable, Identifiable, Sendable {
-    case commandR = "cmdR"
-    case commandShiftR = "cmdShiftR"
-    case optionR = "optR"
-    case controlR = "ctrlR"
-
-    public var id: String { rawValue }
-
-    public var displayName: String {
-        switch self {
-        case .commandR: return "⌘R"
-        case .commandShiftR: return "⌘⇧R"
-        case .optionR: return "⌥R"
-        case .controlR: return "⌃R"
-        }
-    }
-
-    /// Returns the key code for 'R' (15)
-    public var keyCode: UInt16 { 15 }
-
-    /// Returns the required modifier flags
-    public var modifierFlags: NSEvent.ModifierFlags {
-        switch self {
-        case .commandR: return .command
-        case .commandShiftR: return [.command, .shift]
-        case .optionR: return .option
-        case .controlR: return .control
-        }
-    }
-
-    /// Checks if an event matches this shortcut
-    public func matches(_ event: NSEvent) -> Bool {
-        event.keyCode == keyCode &&
-        event.modifierFlags.intersection(.deviceIndependentFlagsMask) == modifierFlags
-    }
-
-    // MARK: - Persistence
-
-    private static let defaultsKey = "editRecordShortcut"
-
-    public static func loadEditRecordShortcut() -> EditWindowShortcut {
-        let rawValue = UserDefaults.standard.string(forKey: defaultsKey) ?? ""
-        return EditWindowShortcut(rawValue: rawValue) ?? .commandR
-    }
-
-    public func saveToDefaults() {
-        UserDefaults.standard.set(rawValue, forKey: Self.defaultsKey)
     }
 }

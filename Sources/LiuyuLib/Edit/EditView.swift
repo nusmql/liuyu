@@ -66,11 +66,14 @@ struct EditView: View {
                     .font(.system(size: 14))
                     .scrollContentBackground(.hidden)
                     .padding(.horizontal, 20)
-                    .padding(.top, 20)
+                    .padding(.vertical, 12)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                Divider()
 
                 micArea
                     .padding(.horizontal, 20)
-                    .padding(.bottom, 12)
+                    .padding(.vertical, 12)
             }
         } else {
             // Empty: mic area centered vertically

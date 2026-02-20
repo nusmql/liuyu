@@ -125,23 +125,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Hotkey
 
-    private func migrateHotkeySettingsIfNeeded() {
-        guard UserDefaults.standard.object(forKey: "hotkeyPreset") != nil,
-              UserDefaults.standard.object(forKey: "recordedShortcut") == nil else {
-            return
-        }
-
-        let presetRaw = UserDefaults.standard.string(forKey: "hotkeyPreset") ?? "Right Option"
-        let preset = HotkeyPreset.from(rawValue: presetRaw)
-
-        let shortcut = RecordedShortcut.from(preset: preset)
-        shortcut.saveToDefaults()
-        UserDefaults.standard.removeObject(forKey: "hotkeyPreset")
-        print("[Liuyu] Migrated hotkey preset to new shortcut format")
-    }
-
     private func applyHotkeyShortcut() {
-        migrateHotkeySettingsIfNeeded()
         hotkeyManager.shortcut = RecordedShortcut.loadFromDefaults()
     }
 
@@ -317,23 +301,6 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         stopRecordingAndTranscribe()
-    }
-
-    private func handleToggle() {
-        print("[AppDelegate] handleToggle called, isRecording: \(isRecording)")
-        // Debounce: prevent rapid toggles
-        guard Date().timeIntervalSince(recordingStartTime ?? Date(timeIntervalSince1970: 0)) > 0.1 else {
-            print("[AppDelegate] Toggle debounced - too soon")
-            return
-        }
-
-        if isRecording {
-            // Stop recording
-            handleKeyUp()
-        } else {
-            // Start recording
-            handleKeyDown()
-        }
     }
 
     private func stopRecordingAndTranscribe() {
