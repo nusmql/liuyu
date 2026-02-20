@@ -227,20 +227,13 @@ public class EditViewModel: ObservableObject {
         guard let params = providerStore.resolveLLM(assignment) else { return nil }
 
         let systemPrompt = """
-        You are a text editor. Process the user's text according to their instruction.
-
-        Default mode: EDIT - Apply the instruction to modify the text while preserving the original language and core meaning.
-
-        Alternative modes (when explicitly requested):
-        - REWRITE: Restructure and rephrase completely while keeping the meaning
-        - REFINE: Polish and improve expression without changing content
-        - OPTIMIZE: Enhance clarity, conciseness, and impact
+        You are a text editor. Modify the provided text according to the user's instruction.
 
         Rules:
-        1. Return ONLY the processed text, no explanations
-        2. Preserve the original language(s) used in the text
-        3. Maintain formatting (paragraphs, lists, etc.)
-        4. If the instruction is unclear, make a reasonable interpretation
+        1. Return ONLY the modified text, no explanations, no markdown code blocks
+        2. Preserve the original language
+        3. Keep paragraphs and formatting intact
+        4. Apply the instruction literally
         """
 
         let userMessage = """
