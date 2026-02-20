@@ -21,6 +21,9 @@ else
 fi
 
 cp "Sources/LiuyuLib/Resources/Info.plist" "${BUNDLE_DIR}/Contents/"
+cp "Sources/LiuyuLib/Resources/AppIcon.icns" "${BUNDLE_DIR}/Contents/Resources/"
+cp "Sources/LiuyuLib/Resources/MenuIcon_18.png" "${BUNDLE_DIR}/Contents/Resources/"
+cp "Sources/LiuyuLib/Resources/MenuIcon_18@2x.png" "${BUNDLE_DIR}/Contents/Resources/"
 
 LUCIDE_BUNDLE=".build/Build/Products/Release/LucideIcons_LucideIcons.bundle"
 if [ -d "${LUCIDE_BUNDLE}" ]; then

@@ -100,7 +100,13 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: "mic.fill", accessibilityDescription: "Liuyu")
+            // Try to load custom icon, fall back to SF Symbol if not found
+            if let customImage = NSImage(named: "MenuIcon_18") ?? NSImage(named: "MenuIcon") {
+                customImage.isTemplate = true  // Allows macOS to recolor for dark/light mode
+                button.image = customImage
+            } else {
+                button.image = NSImage(systemSymbolName: "mic.fill", accessibilityDescription: "Liuyu")
+            }
         }
 
         let menu = NSMenu()
