@@ -46,6 +46,9 @@ struct EditView: View {
             onEscape: {
                 viewModel.clear()
             },
+            onCopy: {
+                viewModel.copy()
+            },
             onStartRecording: {
                 viewModel.startRecording()
             },
@@ -216,7 +219,7 @@ struct EditView: View {
 
             Button(action: { viewModel.copy() }) {
                 Label {
-                    Text("Copy")
+                    Text("Copy (⌘C)")
                 } icon: {
                     Image(nsImage: Lucide.clipboardCopy)
                         .resizable()
@@ -256,6 +259,7 @@ private struct EditViewKeyboardHandler: ViewModifier {
     let editState: EditState
     let onReturn: () -> Void
     let onEscape: () -> Void
+    let onCopy: () -> Void
     let onStartRecording: () -> Void
     let onStopRecording: () -> Void
 
@@ -283,6 +287,12 @@ private struct EditViewKeyboardHandler: ViewModifier {
                             return nil
                         }
                         return event
+                    }
+
+                    // Cmd+C - Copy text (when not in text editor)
+                    if event.keyCode == 8 && event.modifierFlags.contains(.command) && hasText {
+                        onCopy()
+                        return nil
                     }
 
                     // Voice record shortcut - Hold to record, release to stop
