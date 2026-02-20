@@ -188,29 +188,12 @@ struct EditView: View {
         .padding(.vertical, 16)
     }
 
-    // Processing view with rotating arc around mic icon (like WeChat)
+    // Processing view with rotating arc only (no mic icon)
     private func processingView(text: String) -> some View {
         VStack(spacing: 12) {
-            ZStack {
-                // Rotating arc - larger and behind the mic
-                RotatingArc()
-                    .frame(width: 70, height: 70)
-                    .id("rotating-\(viewModel.editState)")
-
-                // Mic icon with background circle
-                Circle()
-                    .fill(Color.weChatGreen)
-                    .frame(width: 50, height: 50)
-
-                Image(nsImage: {
-                    let img = Lucide.mic.copy() as! NSImage
-                    img.isTemplate = true
-                    return img
-                }())
-                .resizable()
-                .frame(width: 24, height: 24)
-                .foregroundColor(.white)
-            }
+            RotatingArc()
+                .frame(width: 56, height: 56)
+                .id("rotating-\(viewModel.editState)")
 
             Text(text)
                 .foregroundColor(.secondary)

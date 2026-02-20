@@ -6,30 +6,13 @@ struct ProcessingView: View {
 
     var body: some View {
         HStack(spacing: 16) {
-            // Rotating arc around mic
-            ZStack {
-                // Rotating arc - larger and behind the mic
-                TimelineView(.animation(minimumInterval: 1/60, paused: false)) { _ in
-                    Circle()
-                        .trim(from: 0, to: 0.75)
-                        .stroke(Color.weChatGreen, style: StrokeStyle(lineWidth: 4, lineCap: .round))
-                        .frame(width: 56, height: 56)
-                        .rotationEffect(.degrees(rotation))
-                }
-
-                // Mic icon with background circle
+            // Rotating arc only (no mic)
+            TimelineView(.animation(minimumInterval: 1/60, paused: false)) { _ in
                 Circle()
-                    .fill(Color.weChatGreen)
-                    .frame(width: 40, height: 40)
-
-                Image(nsImage: {
-                    let img = Lucide.mic.copy() as! NSImage
-                    img.isTemplate = true
-                    return img
-                }())
-                    .resizable()
-                    .frame(width: 18, height: 18)
-                    .foregroundColor(.white)
+                    .trim(from: 0, to: 0.75)
+                    .stroke(Color.weChatGreen, style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                    .frame(width: 44, height: 44)
+                    .rotationEffect(.degrees(rotation))
             }
             .frame(width: 50, height: 50)
             .onAppear {
