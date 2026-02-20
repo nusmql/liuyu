@@ -8,11 +8,13 @@ struct ProcessingView: View {
         HStack(spacing: 16) {
             // Rotating arc around mic
             ZStack {
-                Circle()
-                    .trim(from: 0, to: 0.75)
-                    .stroke(Color.weChatGreen, style: StrokeStyle(lineWidth: 3, lineCap: .round))
-                    .frame(width: 44, height: 44)
-                    .rotationEffect(.degrees(rotation))
+                TimelineView(.animation(minimumInterval: 1/60, paused: false)) { _ in
+                    Circle()
+                        .trim(from: 0, to: 0.75)
+                        .stroke(Color.weChatGreen, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                        .frame(width: 44, height: 44)
+                        .rotationEffect(.degrees(rotation))
+                }
 
                 Image(nsImage: {
                     let img = Lucide.mic.copy() as! NSImage

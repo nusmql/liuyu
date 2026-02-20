@@ -192,9 +192,10 @@ struct EditView: View {
     private func processingView(text: String) -> some View {
         VStack(spacing: 12) {
             ZStack {
-                // Rotating arc
+                // Rotating arc - use viewModel.editState as ID to force recreation when state changes
                 RotatingArc()
                     .frame(width: 56, height: 56)
+                    .id("rotating-\(viewModel.editState)")
 
                 // Mic icon
                 Image(nsImage: {
@@ -281,33 +282,33 @@ struct EditView: View {
 // Pulsing circles behind mic (like WeChat voice input)
 private struct PulsingCircles: View {
     let audioLevel: Float
-    @State private var scale1: CGFloat = 1.0
-    @State private var opacity1: Double = 0.6
-    @State private var scale2: CGFloat = 1.0
-    @State private var opacity2: Double = 0.6
-    @State private var scale3: CGFloat = 1.0
-    @State private var opacity3: Double = 0.6
+    @State private var scale1: CGFloat = 0.5
+    @State private var opacity1: Double = 1.0
+    @State private var scale2: CGFloat = 0.5
+    @State private var opacity2: Double = 1.0
+    @State private var scale3: CGFloat = 0.5
+    @State private var opacity3: Double = 1.0
 
     var body: some View {
         ZStack {
-            // Outer ring
+            // Outer ring - larger, brighter, and more visible
             Circle()
                 .fill(Color.weChatGreen)
-                .frame(width: 56, height: 56)
+                .frame(width: 64, height: 64)
                 .scaleEffect(scale1)
                 .opacity(opacity1)
 
             // Middle ring
             Circle()
                 .fill(Color.weChatGreen)
-                .frame(width: 56, height: 56)
+                .frame(width: 64, height: 64)
                 .scaleEffect(scale2)
                 .opacity(opacity2)
 
             // Inner ring
             Circle()
                 .fill(Color.weChatGreen)
-                .frame(width: 56, height: 56)
+                .frame(width: 64, height: 64)
                 .scaleEffect(scale3)
                 .opacity(opacity3)
 
@@ -315,26 +316,27 @@ private struct PulsingCircles: View {
             Circle()
                 .fill(Color.weChatGreen)
                 .frame(width: 56, height: 56)
+                .shadow(color: Color.weChatGreen.opacity(0.6), radius: 12, x: 0, y: 0)
         }
         .onAppear {
-            // Animate ring 1
-            withAnimation(.easeOut(duration: 1.2).repeatForever(autoreverses: false)) {
-                scale1 = 1.6
+            // Animate ring 1 - much larger expansion for visibility
+            withAnimation(.easeOut(duration: 1.0).repeatForever(autoreverses: false)) {
+                scale1 = 2.5
                 opacity1 = 0
             }
 
             // Animate ring 2 (delayed)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                withAnimation(.easeOut(duration: 1.2).repeatForever(autoreverses: false)) {
-                    scale2 = 1.6
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.33) {
+                withAnimation(.easeOut(duration: 1.0).repeatForever(autoreverses: false)) {
+                    scale2 = 2.5
                     opacity2 = 0
                 }
             }
 
             // Animate ring 3 (more delayed)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-                withAnimation(.easeOut(duration: 1.2).repeatForever(autoreverses: false)) {
-                    scale3 = 1.6
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.66) {
+                withAnimation(.easeOut(duration: 1.0).repeatForever(autoreverses: false)) {
+                    scale3 = 2.5
                     opacity3 = 0
                 }
             }
@@ -347,17 +349,19 @@ private struct RotatingArc: View {
     @State private var rotation: Double = 0
 
     var body: some View {
-        Circle()
-            .trim(from: 0, to: 0.75)
-            .stroke(Color.weChatGreen, style: StrokeStyle(lineWidth: 3, lineCap: .round))
-            .frame(width: 50, height: 50)
-            .rotationEffect(.degrees(rotation))
-            .onAppear {
-                // Start a continuous rotation animation
-                withAnimation(.linear(duration: 1.0).repeatForever(autoreverses: false)) {
-                    rotation = 360
-                }
+        TimelineView(.animation(minimumInterval: 1/60, paused: false)) { _ in
+            Circle()
+                .trim(from: 0, to: 0.75)
+                .stroke(Color.weChatGreen, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                .frame(width: 50, height: 50)
+                .rotationEffect(.degrees(rotation))
+        }
+        .onAppear {
+            // Start continuous rotation animation
+            withAnimation(.linear(duration: 1.0).repeatForever(autoreverses: false)) {
+                rotation = 360
             }
+        }
     }
 }
 

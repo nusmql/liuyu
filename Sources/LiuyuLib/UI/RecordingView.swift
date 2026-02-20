@@ -5,12 +5,12 @@ struct RecordingView: View {
     let audioLevel: Float
     let onClose: () -> Void
 
-    @State private var scale1: CGFloat = 1.0
-    @State private var opacity1: Double = 0.6
-    @State private var scale2: CGFloat = 1.0
-    @State private var opacity2: Double = 0.6
-    @State private var scale3: CGFloat = 1.0
-    @State private var opacity3: Double = 0.6
+    @State private var scale1: CGFloat = 0.5
+    @State private var opacity1: Double = 1.0
+    @State private var scale2: CGFloat = 0.5
+    @State private var opacity2: Double = 1.0
+    @State private var scale3: CGFloat = 0.5
+    @State private var opacity3: Double = 1.0
 
     var body: some View {
         HStack(spacing: 16) {
@@ -53,24 +53,24 @@ struct RecordingView: View {
             }
             .frame(width: 50, height: 50)
             .onAppear {
-                // Animate ring 1
-                withAnimation(.easeOut(duration: 1.2).repeatForever(autoreverses: false)) {
-                    scale1 = 1.5
+                // Animate ring 1 - larger expansion for visibility
+                withAnimation(.easeOut(duration: 1.0).repeatForever(autoreverses: false)) {
+                    scale1 = 2.5
                     opacity1 = 0
                 }
 
                 // Animate ring 2 (delayed)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                    withAnimation(.easeOut(duration: 1.2).repeatForever(autoreverses: false)) {
-                        scale2 = 1.5
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.33) {
+                    withAnimation(.easeOut(duration: 1.0).repeatForever(autoreverses: false)) {
+                        scale2 = 2.5
                         opacity2 = 0
                     }
                 }
 
                 // Animate ring 3 (more delayed)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-                    withAnimation(.easeOut(duration: 1.2).repeatForever(autoreverses: false)) {
-                        scale3 = 1.5
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.66) {
+                    withAnimation(.easeOut(duration: 1.0).repeatForever(autoreverses: false)) {
+                        scale3 = 2.5
                         opacity3 = 0
                     }
                 }
