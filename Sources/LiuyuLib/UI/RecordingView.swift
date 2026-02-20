@@ -53,23 +53,23 @@ struct RecordingView: View {
             }
             .frame(width: 50, height: 50)
             .onAppear {
-                // Animate ring 1 - larger expansion for visibility
-                withAnimation(.easeOut(duration: 1.0).repeatForever(autoreverses: false)) {
+                // Animate ring 1 - slower animation
+                withAnimation(.easeOut(duration: 1.5).repeatForever(autoreverses: false)) {
                     scale1 = 2.5
                     opacity1 = 0
                 }
 
                 // Animate ring 2 (delayed)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.33) {
-                    withAnimation(.easeOut(duration: 1.0).repeatForever(autoreverses: false)) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    withAnimation(.easeOut(duration: 1.5).repeatForever(autoreverses: false)) {
                         scale2 = 2.5
                         opacity2 = 0
                     }
                 }
 
                 // Animate ring 3 (more delayed)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.66) {
-                    withAnimation(.easeOut(duration: 1.0).repeatForever(autoreverses: false)) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                    withAnimation(.easeOut(duration: 1.5).repeatForever(autoreverses: false)) {
                         scale3 = 2.5
                         opacity3 = 0
                     }

@@ -192,12 +192,16 @@ struct EditView: View {
     private func processingView(text: String) -> some View {
         VStack(spacing: 12) {
             ZStack {
-                // Rotating arc - use viewModel.editState as ID to force recreation when state changes
+                // Rotating arc - larger and behind the mic
                 RotatingArc()
-                    .frame(width: 56, height: 56)
+                    .frame(width: 70, height: 70)
                     .id("rotating-\(viewModel.editState)")
 
-                // Mic icon
+                // Mic icon with background circle
+                Circle()
+                    .fill(Color.weChatGreen)
+                    .frame(width: 50, height: 50)
+
                 Image(nsImage: {
                     let img = Lucide.mic.copy() as! NSImage
                     img.isTemplate = true
@@ -319,23 +323,23 @@ private struct PulsingCircles: View {
                 .shadow(color: Color.weChatGreen.opacity(0.6), radius: 12, x: 0, y: 0)
         }
         .onAppear {
-            // Animate ring 1 - much larger expansion for visibility
-            withAnimation(.easeOut(duration: 1.0).repeatForever(autoreverses: false)) {
+            // Animate ring 1 - slower animation for better visibility
+            withAnimation(.easeOut(duration: 1.5).repeatForever(autoreverses: false)) {
                 scale1 = 2.5
                 opacity1 = 0
             }
 
             // Animate ring 2 (delayed)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.33) {
-                withAnimation(.easeOut(duration: 1.0).repeatForever(autoreverses: false)) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                withAnimation(.easeOut(duration: 1.5).repeatForever(autoreverses: false)) {
                     scale2 = 2.5
                     opacity2 = 0
                 }
             }
 
             // Animate ring 3 (more delayed)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.66) {
-                withAnimation(.easeOut(duration: 1.0).repeatForever(autoreverses: false)) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                withAnimation(.easeOut(duration: 1.5).repeatForever(autoreverses: false)) {
                     scale3 = 2.5
                     opacity3 = 0
                 }
@@ -352,8 +356,8 @@ private struct RotatingArc: View {
         TimelineView(.animation(minimumInterval: 1/60, paused: false)) { _ in
             Circle()
                 .trim(from: 0, to: 0.75)
-                .stroke(Color.weChatGreen, style: StrokeStyle(lineWidth: 3, lineCap: .round))
-                .frame(width: 50, height: 50)
+                .stroke(Color.weChatGreen, style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                .frame(width: 56, height: 56)
                 .rotationEffect(.degrees(rotation))
         }
         .onAppear {
