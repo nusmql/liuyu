@@ -148,35 +148,17 @@ struct HotkeySettingsView: View {
     }
 
     private func checkConflicts(for shortcut: RecordedShortcut?) {
-        guard let shortcut = shortcut else {
-            conflictWarning = nil
-            return
-        }
-
-        let flags = shortcut.flags
-        let modifiers = flags.intersection([.maskCommand, .maskAlternate, .maskControl, .maskShift])
-
-        let commonSystemShortcuts: [CGEventFlags] = [
-            [.maskCommand, .maskShift, .maskAlternate],
-            [.maskCommand, .maskControl],
-            [.maskCommand, .maskShift, .maskControl],
-        ]
-
-        if commonSystemShortcuts.contains(where: { $0 == modifiers }) {
-            conflictWarning = "May conflict with system shortcuts"
-        } else {
-            conflictWarning = nil
-        }
+        conflictWarning = systemConflictWarning(for: shortcut)
     }
 
     private func checkEditRecordConflicts(for shortcut: RecordedShortcut?) {
-        guard let shortcut = shortcut else {
-            editRecordConflictWarning = nil
-            return
-        }
+        editRecordConflictWarning = systemConflictWarning(for: shortcut)
+    }
 
-        let flags = shortcut.flags
-        let modifiers = flags.intersection([.maskCommand, .maskAlternate, .maskControl, .maskShift])
+    private func systemConflictWarning(for shortcut: RecordedShortcut?) -> String? {
+        guard let shortcut = shortcut else { return nil }
+
+        let modifiers = shortcut.flags.intersection([.maskCommand, .maskAlternate, .maskControl, .maskShift])
 
         let commonSystemShortcuts: [CGEventFlags] = [
             [.maskCommand, .maskShift, .maskAlternate],
@@ -184,11 +166,7 @@ struct HotkeySettingsView: View {
             [.maskCommand, .maskShift, .maskControl],
         ]
 
-        if commonSystemShortcuts.contains(where: { $0 == modifiers }) {
-            editRecordConflictWarning = "May conflict with system shortcuts"
-        } else {
-            editRecordConflictWarning = nil
-        }
+        return commonSystemShortcuts.contains(where: { $0 == modifiers }) ? "May conflict with system shortcuts" : nil
     }
 }
 

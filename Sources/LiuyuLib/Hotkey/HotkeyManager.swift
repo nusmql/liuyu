@@ -1,9 +1,8 @@
 // Sources/LiuyuLib/Hotkey/HotkeyManager.swift
-import Foundation
-import Combine
-import CoreGraphics
 import AppKit
 import Carbon
+import Combine
+import CoreGraphics
 
 public enum HotkeyEvent {
     case keyDown

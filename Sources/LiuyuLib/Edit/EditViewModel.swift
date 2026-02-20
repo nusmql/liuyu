@@ -1,7 +1,6 @@
 // Sources/LiuyuLib/Edit/EditViewModel.swift
-import Foundation
-import Combine
 import AppKit
+import Combine
 
 public enum EditState: Equatable {
     case idle

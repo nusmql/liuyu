@@ -1,6 +1,7 @@
 // Sources/LiuyuLib/Settings/ShortcutRecorder.swift
 import Cocoa
 import CoreGraphics
+import SwiftUI
 
 /// Protocol for receiving events from ShortcutRecorder.
 @MainActor public protocol ShortcutRecorderDelegate: AnyObject {
@@ -363,8 +364,6 @@ public class ShortcutRecorder: NSView {
 }
 
 // MARK: - SwiftUI Wrapper
-
-import SwiftUI
 
 /// A SwiftUI wrapper for ShortcutRecorder.
 public struct ShortcutRecorderView: NSViewRepresentable {
