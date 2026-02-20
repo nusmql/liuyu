@@ -133,10 +133,10 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         for path in possiblePaths {
             if FileManager.default.fileExists(atPath: path.path),
                let image = NSImage(contentsOf: path) {
-                // Set appropriate size for status bar
-                let screenScale = NSScreen.main?.backingScaleFactor ?? 1.0
-                let size: CGFloat = 18.0
-                image.size = NSSize(width: size / screenScale, height: size / screenScale)
+                // Set template mode for dark/light mode support
+                image.isTemplate = true
+                // Set the size to match status bar expectations
+                image.size = NSSize(width: 18, height: 18)
                 return image
             }
         }
