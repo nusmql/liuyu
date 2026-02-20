@@ -353,14 +353,9 @@ private struct RotatingArc: View {
             .frame(width: 50, height: 50)
             .rotationEffect(.degrees(rotation))
             .onAppear {
-                // Use a timer for smooth rotation
-                Timer.scheduledTimer(withTimeInterval: 0.016, repeats: true) { _ in
-                    MainActor.assumeIsolated {
-                        rotation += 6 // 360 degrees in 1 second at 60fps
-                        if rotation >= 360 {
-                            rotation = 0
-                        }
-                    }
+                // Start a continuous rotation animation
+                withAnimation(.linear(duration: 1.0).repeatForever(autoreverses: false)) {
+                    rotation = 360
                 }
             }
     }
