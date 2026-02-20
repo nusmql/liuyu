@@ -29,7 +29,9 @@ public class EditViewModel: ObservableObject {
     public var hasText: Bool { !text.isEmpty }
 
     public var micButtonLabel: String {
-        let shortcut = RecordedShortcut.loadEditRecordShortcut()
+        // When no text, show global shortcut for new input
+        // When has text, show edit window shortcut for modification
+        let shortcut = hasText ? RecordedShortcut.loadEditRecordShortcut() : RecordedShortcut.loadFromDefaults()
         if hasText {
             return "Hold to Edit (or \(shortcut.displayString))"
         } else {

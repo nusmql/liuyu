@@ -29,7 +29,9 @@ class EditWindowController: NSObject, NSWindowDelegate {
     }
 
     func showWithText(_ text: String, onInsert: @escaping (String) -> Void) {
+        // If window already visible, just update the text and bring to front
         if let window, window.isVisible {
+            editViewModel?.text = text
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             return
