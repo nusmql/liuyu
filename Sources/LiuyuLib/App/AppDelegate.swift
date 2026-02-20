@@ -131,15 +131,19 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         ].compactMap { $0 }
 
         for path in possiblePaths {
-            if FileManager.default.fileExists(atPath: path.path),
-               let image = NSImage(contentsOf: path) {
-                // Set template mode for dark/light mode support
-                // This makes the icon white on dark mode and black on light mode
-                image.isTemplate = true
-                // Don't set size here - let the button handle it naturally
-                return image
+            print("[MenuIcon] Checking path: \(path.path)")
+            if FileManager.default.fileExists(atPath: path.path) {
+                print("[MenuIcon] Found at: \(path.path)")
+                if let image = NSImage(contentsOf: path) {
+                    print("[MenuIcon] Successfully loaded image: \(image.size.width)x\(image.size.height)")
+                    image.isTemplate = true
+                    return image
+                } else {
+                    print("[MenuIcon] Failed to load image from: \(path.path)")
+                }
             }
         }
+        print("[MenuIcon] No custom icon found, using SF Symbol fallback")
         return nil
     }
 
