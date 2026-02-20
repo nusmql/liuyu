@@ -154,7 +154,7 @@ public extension RecordedShortcut {
         }
 
         do {
-            let shortcut = try JSONDecoder().decode(RecordedShortcut.self, from: data)
+            let shortcut = try JSONDecoder().decode(RecordedShortcut.self, from: data) 
             return shortcut
         } catch {
             return .defaultEditRecordShortcut

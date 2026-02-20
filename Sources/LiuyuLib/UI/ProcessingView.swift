@@ -2,43 +2,39 @@ import SwiftUI
 import LucideIcons
 
 struct ProcessingView: View {
+    @State private var rotation: Double = 0
+
     var body: some View {
         HStack(spacing: 16) {
-            // Rotating arc around mic using TimelineView
-            TimelineView(.animation(minimumInterval: 0.016, paused: false)) { timeline in
-                ZStack {
-                    Canvas { context, size in
-                        let center = CGPoint(x: size.width / 2, y: size.height / 2)
-                        let time = timeline.date.timeIntervalSinceReferenceDate
-                        let rotation = time * 360 // One rotation per second
-
-                        // Draw rotating arc
-                        let radius = 20.0
-                        let startAngle = Angle(degrees: rotation)
-                        let endAngle = Angle(degrees: rotation + 270)
-
-                        var path = Path()
-                        path.addArc(center: center, radius: radius,
-                                   startAngle: startAngle, endAngle: endAngle,
-                                   clockwise: false)
-
-                        context.stroke(path, with: .color(Color.weChatGreen),
-                                     lineWidth: 3)
-                    }
+            // Rotating arc around mic
+            ZStack {
+                Circle()
+                    .trim(from: 0, to: 0.75)
+                    .stroke(Color.weChatGreen, style: StrokeStyle(lineWidth: 3, lineCap: .round))
                     .frame(width: 44, height: 44)
+                    .rotationEffect(.degrees(rotation))
 
-                    // Mic icon centered
-                    Image(nsImage: {
-                        let img = Lucide.mic.copy() as! NSImage
-                        img.isTemplate = true
-                        return img
-                    }())
-                        .resizable()
-                        .frame(width: 16, height: 16)
-                        .foregroundColor(.white)
-                }
+                Image(nsImage: {
+                    let img = Lucide.mic.copy() as! NSImage
+                    img.isTemplate = true
+                    return img
+                }())
+                    .resizable()
+                    .frame(width: 16, height: 16)
+                    .foregroundColor(.white)
             }
             .frame(width: 50, height: 50)
+            .onAppear {
+                // Use a timer for smooth rotation
+                Timer.scheduledTimer(withTimeInterval: 0.016, repeats: true) { _ in
+                    MainActor.assumeIsolated {
+                        rotation += 6 // 360 degrees in 1 second at 60fps
+                        if rotation >= 360 {
+                            rotation = 0
+                        }
+                    }
+                }
+            }
 
             VStack(alignment: .leading, spacing: 4) {
                 Text("Processing...")
