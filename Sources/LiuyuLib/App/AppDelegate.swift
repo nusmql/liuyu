@@ -134,9 +134,9 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             if FileManager.default.fileExists(atPath: path.path),
                let image = NSImage(contentsOf: path) {
                 // Set template mode for dark/light mode support
+                // This makes the icon white on dark mode and black on light mode
                 image.isTemplate = true
-                // Set the size to match status bar expectations
-                image.size = NSSize(width: 18, height: 18)
+                // Don't set size here - let the button handle it naturally
                 return image
             }
         }
