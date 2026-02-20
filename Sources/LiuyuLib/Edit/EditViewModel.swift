@@ -88,23 +88,34 @@ public class EditViewModel: ObservableObject {
 
         guard case .recording = editState else { return }
 
+        // Immediately switch to processing state so UI shows "Processing" instead of stuck waveform
+        if hasText {
+            editState = .editing
+        } else {
+            editState = .transcribing
+        }
+
         let elapsed = Date().timeIntervalSince(recordingStartTime ?? Date())
 
         if elapsed < minimumRecordingDuration {
             let remaining = minimumRecordingDuration - elapsed
             Task {
                 try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
-                finishRecording()
+                await finishRecording()
             }
         } else {
-            finishRecording()
+            Task {
+                await finishRecording()
+            }
         }
     }
 
-    private func finishRecording() {
+    private func finishRecording() async {
         guard let audioURL = recordingController.stop() else {
-            errorMessage = "No audio recorded."
-            editState = .idle
+            await MainActor.run {
+                errorMessage = "No audio recorded."
+                editState = .idle
+            }
             return
         }
 
@@ -112,16 +123,7 @@ public class EditViewModel: ObservableObject {
         print("[Liuyu Timing] Recording stopped — duration: \(String(format: "%.2f", recordingDuration))s")
 
         currentAudioURL = audioURL
-
-        if hasText {
-            editState = .editing
-        } else {
-            editState = .transcribing
-        }
-
-        Task {
-            await processAudio(audioURL: audioURL)
-        }
+        await processAudio(audioURL: audioURL)
     }
 
     // MARK: - Processing

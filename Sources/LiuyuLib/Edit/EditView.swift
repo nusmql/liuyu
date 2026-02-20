@@ -106,26 +106,10 @@ struct EditView: View {
                     }
 
             case .transcribing:
-                HStack(spacing: 8) {
-                    ProgressView()
-                        .scaleEffect(0.8)
-                    Text("Transcribing...")
-                        .foregroundStyle(.secondary)
-                        .font(.system(size: 13))
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 20)
+                processingView(text: "Transcribing...")
 
             case .editing:
-                HStack(spacing: 8) {
-                    ProgressView()
-                        .scaleEffect(0.8)
-                    Text("Editing...")
-                        .foregroundStyle(.secondary)
-                        .font(.system(size: 13))
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 20)
+                processingView(text: "Editing...")
             }
         }
         .contentShape(Rectangle())
@@ -190,6 +174,33 @@ struct EditView: View {
         .padding(.vertical, 20)
     }
 
+    // Processing view with animated progress ring around mic icon
+    private func processingView(text: String) -> some View {
+        VStack(spacing: 12) {
+            ZStack {
+                // Progress ring
+                ProgressRing()
+                    .frame(width: 50, height: 50)
+
+                // Mic icon
+                Image(nsImage: {
+                    let img = Lucide.mic.copy() as! NSImage
+                    img.isTemplate = true
+                    return img
+                }())
+                .resizable()
+                .frame(width: 20, height: 20)
+                .foregroundStyle(.secondary)
+            }
+
+            Text(text)
+                .foregroundStyle(.secondary)
+                .font(.system(size: 13))
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 16)
+    }
+
     // MARK: - Helpers
 
     private var clearButtonLabel: String {
@@ -248,6 +259,35 @@ struct EditView: View {
             .controlSize(.regular)
             .disabled(!viewModel.hasText)
         }
+    }
+}
+
+// Progress ring animation component
+private struct ProgressRing: View {
+    @State private var rotation: Double = 0
+
+    var body: some View {
+        Circle()
+            .stroke(
+                AngularGradient(
+                    colors: [
+                        .gray.opacity(0.2),
+                        .gray.opacity(0.6),
+                        .gray.opacity(0.2)
+                    ],
+                    center: .center,
+                    angle: .degrees(rotation)
+                ),
+                lineWidth: 3
+            )
+            .onAppear {
+                withAnimation(
+                    .linear(duration: 1.5)
+                    .repeatForever(autoreverses: false)
+                ) {
+                    rotation = 360
+                }
+            }
     }
 }
 
