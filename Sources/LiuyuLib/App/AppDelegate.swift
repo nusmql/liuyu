@@ -118,32 +118,28 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func loadMenuIcon() -> NSImage? {
-        // Try multiple possible locations for the menu icon
+        // Try @2x first for Retina, then fallback to @1x
         let possiblePaths: [URL] = [
-            // App bundle Resources (production)
-            Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/MenuIcon_18.png"),
-            Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/MenuIcon_18@2x.png"),
-            Bundle.main.resourceURL?.appendingPathComponent("MenuIcon_18.png"),
-            Bundle.main.resourceURL?.appendingPathComponent("MenuIcon_18@2x.png"),
-            // Source directory (development)
-            URL(fileURLWithPath: "/Users/lei/dev/src/github/liuyu/Sources/LiuyuLib/Resources/MenuIcon_18.png"),
+            // Source directory (development) - @2x first
             URL(fileURLWithPath: "/Users/lei/dev/src/github/liuyu/Sources/LiuyuLib/Resources/MenuIcon_18@2x.png"),
+            URL(fileURLWithPath: "/Users/lei/dev/src/github/liuyu/Sources/LiuyuLib/Resources/MenuIcon_18.png"),
+            // App bundle Resources (production) - @2x first
+            Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/MenuIcon_18@2x.png"),
+            Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/MenuIcon_18.png"),
+            Bundle.main.resourceURL?.appendingPathComponent("MenuIcon_18@2x.png"),
+            Bundle.main.resourceURL?.appendingPathComponent("MenuIcon_18.png"),
         ].compactMap { $0 }
 
         for path in possiblePaths {
-            print("[MenuIcon] Checking path: \(path.path)")
-            if FileManager.default.fileExists(atPath: path.path) {
-                print("[MenuIcon] Found at: \(path.path)")
-                if let image = NSImage(contentsOf: path) {
-                    print("[MenuIcon] Successfully loaded image: \(image.size.width)x\(image.size.height)")
-                    image.isTemplate = true
-                    return image
-                } else {
-                    print("[MenuIcon] Failed to load image from: \(path.path)")
-                }
+            if FileManager.default.fileExists(atPath: path.path),
+               let image = NSImage(contentsOf: path) {
+                // For status bar, we want template mode so it adapts to dark/light
+                image.isTemplate = true
+                // Set the logical size (18x18), actual pixels depend on @1x or @2x
+                image.size = NSSize(width: 18, height: 18)
+                return image
             }
         }
-        print("[MenuIcon] No custom icon found, using SF Symbol fallback")
         return nil
     }
 
