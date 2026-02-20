@@ -2,26 +2,41 @@ import SwiftUI
 import LucideIcons
 
 struct ProcessingView: View {
-    @State private var rotation: Double = 0
-
     var body: some View {
         HStack(spacing: 16) {
-            // Rotating arc around mic (like WeChat)
-            ZStack {
-                Circle()
-                    .trim(from: 0, to: 0.75)
-                    .stroke(Color.weChatGreen, lineWidth: 3)
-                    .frame(width: 40, height: 40)
-                    .rotationEffect(.degrees(rotation))
+            // Rotating arc around mic using TimelineView
+            TimelineView(.animation(minimumInterval: 0.016, paused: false)) { timeline in
+                ZStack {
+                    Canvas { context, size in
+                        let center = CGPoint(x: size.width / 2, y: size.height / 2)
+                        let time = timeline.date.timeIntervalSinceReferenceDate
+                        let rotation = time * 360 // One rotation per second
 
-                Image(nsImage: {
-                    let img = Lucide.mic.copy() as! NSImage
-                    img.isTemplate = true
-                    return img
-                }())
-                    .resizable()
-                    .frame(width: 16, height: 16)
-                    .foregroundColor(.white)
+                        // Draw rotating arc
+                        let radius = 20.0
+                        let startAngle = Angle(degrees: rotation)
+                        let endAngle = Angle(degrees: rotation + 270)
+
+                        var path = Path()
+                        path.addArc(center: center, radius: radius,
+                                   startAngle: startAngle, endAngle: endAngle,
+                                   clockwise: false)
+
+                        context.stroke(path, with: .color(Color.weChatGreen),
+                                     lineWidth: 3)
+                    }
+                    .frame(width: 44, height: 44)
+
+                    // Mic icon centered
+                    Image(nsImage: {
+                        let img = Lucide.mic.copy() as! NSImage
+                        img.isTemplate = true
+                        return img
+                    }())
+                        .resizable()
+                        .frame(width: 16, height: 16)
+                        .foregroundColor(.white)
+                }
             }
             .frame(width: 50, height: 50)
 
@@ -44,10 +59,5 @@ struct ProcessingView: View {
             RoundedRectangle(cornerRadius: 16)
                 .fill(Color.black.opacity(0.75))
         )
-        .onAppear {
-            withAnimation(.linear(duration: 1.0).repeatForever(autoreverses: false)) {
-                rotation = 360
-            }
-        }
     }
 }

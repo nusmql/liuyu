@@ -281,56 +281,59 @@ struct EditView: View {
 // Pulsing circles behind mic (like WeChat voice input)
 private struct PulsingCircles: View {
     let audioLevel: Float
-    @State private var pulse1: Bool = false
-    @State private var pulse2: Bool = false
 
     var body: some View {
-        ZStack {
-            // Outer circle
-            Circle()
-                .fill(Color.weChatGreen.opacity(0.15))
-                .scaleEffect(pulse1 ? 1.5 : 1.0)
-                .opacity(pulse1 ? 0 : 1)
+        TimelineView(.animation(minimumInterval: 0.05, paused: false)) { timeline in
+            Canvas { context, size in
+                let center = CGPoint(x: size.width / 2, y: size.height / 2)
+                let time = timeline.date.timeIntervalSinceReferenceDate
 
-            // Middle circle
-            Circle()
-                .fill(Color.weChatGreen.opacity(0.25))
-                .scaleEffect(pulse2 ? 1.3 : 0.8)
-                .opacity(pulse2 ? 0.3 : 0.8)
+                // Draw pulsing circles
+                for i in 0..<3 {
+                    let delay = Double(i) * 0.4
+                    let phase = fmod(time - delay, 1.2) / 1.2
+                    let radius = 28 + phase * 20
+                    let opacity = 1.0 - phase
 
-            // Inner solid circle (mic background)
-            Circle()
-                .fill(Color.weChatGreen)
-                .frame(width: 56, height: 56)
-        }
-        .onAppear {
-            withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: false)) {
-                pulse1 = true
+                    var path = Path()
+                    path.addEllipse(in: CGRect(x: center.x - radius, y: center.y - radius,
+                                               width: radius * 2, height: radius * 2))
+
+                    context.fill(path, with: .color(Color.weChatGreen.opacity(opacity * 0.3)))
+                }
+
+                // Draw center circle
+                var centerPath = Path()
+                centerPath.addEllipse(in: CGRect(x: center.x - 28, y: center.y - 28, width: 56, height: 56))
+                context.fill(centerPath, with: .color(Color.weChatGreen))
             }
-            withAnimation(.easeInOut(duration: 1.2).delay(0.4).repeatForever(autoreverses: false)) {
-                pulse2 = true
-            }
-        }
-        .onChange(of: audioLevel) { _ in
-            // Animation intensity could be adjusted based on audio level
         }
     }
 }
 
 // Rotating arc for processing state (like WeChat when sending)
 private struct RotatingArc: View {
-    @State private var rotation: Double = 0
-
     var body: some View {
-        Circle()
-            .trim(from: 0, to: 0.75)
-            .stroke(Color.weChatGreen, lineWidth: 3)
-            .rotationEffect(.degrees(rotation))
-            .onAppear {
-                withAnimation(.linear(duration: 1.0).repeatForever(autoreverses: false)) {
-                    rotation = 360
-                }
+        TimelineView(.animation(minimumInterval: 0.016, paused: false)) { timeline in
+            Canvas { context, size in
+                let center = CGPoint(x: size.width / 2, y: size.height / 2)
+                let time = timeline.date.timeIntervalSinceReferenceDate
+                let rotation = time * 360 // One rotation per second
+
+                // Draw rotating arc
+                let radius = 25.0
+                let startAngle = Angle(degrees: rotation)
+                let endAngle = Angle(degrees: rotation + 270)
+
+                var path = Path()
+                path.addArc(center: center, radius: radius,
+                           startAngle: startAngle, endAngle: endAngle,
+                           clockwise: false)
+
+                context.stroke(path, with: .color(Color.weChatGreen),
+                             lineWidth: 3)
             }
+        }
     }
 }
 
