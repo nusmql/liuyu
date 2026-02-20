@@ -5,6 +5,7 @@ import SwiftUI
 @MainActor
 class EditWindowController: NSObject, NSWindowDelegate {
     private var window: NSWindow?
+    private var editViewModel: EditViewModel?
 
     /// The app the user was working in before opening the Edit window.
     private var previousApp: NSRunningApplication?
@@ -13,6 +14,11 @@ class EditWindowController: NSObject, NSWindowDelegate {
 
     var isWindowVisible: Bool {
         window?.isVisible ?? false
+    }
+
+    /// Returns true if the edit window has text content
+    var hasText: Bool {
+        editViewModel?.hasText ?? false
     }
 
     /// Called when any managed window closes, to decide activation policy.
@@ -51,9 +57,12 @@ class EditWindowController: NSObject, NSWindowDelegate {
         // Always set fresh content so previous text doesn't linger
         let capturedApp = previousApp
         let capturedMouse = previousMouseLocation
+        let viewModel = EditViewModel()
+        viewModel.text = text
+        self.editViewModel = viewModel
         window.contentView = NSHostingView(
             rootView: EditView(
-                initialText: text,
+                viewModel: viewModel,
                 onInsert: { [weak self] text in
                     self?.performInsert(text: text, app: capturedApp, mouseLocation: capturedMouse)
                     onInsert(text)
@@ -73,6 +82,15 @@ class EditWindowController: NSObject, NSWindowDelegate {
 
     func close() {
         window?.close()
+    }
+
+    /// Applies a voice instruction to modify the current text using LLM.
+    /// This is called when the Edit window is already open and user uses the global shortcut.
+    func applyInstruction(_ instruction: String) {
+        guard let viewModel = editViewModel else { return }
+        Task {
+            await viewModel.applyInstruction(instruction)
+        }
     }
 
     func windowWillClose(_ notification: Notification) {

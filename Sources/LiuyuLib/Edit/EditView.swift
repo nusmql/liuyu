@@ -6,12 +6,10 @@ struct EditView: View {
     @StateObject private var viewModel: EditViewModel
     @State private var waveformLevels: [Float] = Array(repeating: 0, count: 7)
 
-    let initialText: String
     let onInsert: (String) -> Void
     let onClose: () -> Void
 
     init(initialText: String = "", onInsert: @escaping (String) -> Void, onClose: @escaping () -> Void) {
-        self.initialText = initialText
         self.onInsert = onInsert
         self.onClose = onClose
         _viewModel = StateObject(wrappedValue: {
@@ -19,6 +17,12 @@ struct EditView: View {
             vm.text = initialText
             return vm
         }())
+    }
+
+    init(viewModel: EditViewModel, onInsert: @escaping (String) -> Void, onClose: @escaping () -> Void) {
+        self.onInsert = onInsert
+        self.onClose = onClose
+        _viewModel = StateObject(wrappedValue: viewModel)
     }
 
     var body: some View {

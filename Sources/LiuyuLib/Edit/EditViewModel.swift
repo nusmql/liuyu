@@ -255,6 +255,24 @@ public class EditViewModel: ObservableObject {
         return result
     }
 
+    // MARK: - External Instruction
+
+    /// Applies a voice instruction to modify the current text using LLM.
+    /// Called when the Edit window is already open and user uses the global shortcut.
+    public func applyInstruction(_ instruction: String) async {
+        guard !instruction.isEmpty else { return }
+
+        editState = .editing
+        e2eStartTime = Date()
+
+        let feature = providerStore.loadFeatureConfig()
+
+        await editWithLLM(instruction: instruction, feature: feature)
+
+        let e2eTotal = Date().timeIntervalSince(e2eStartTime ?? Date())
+        print("[Liuyu Timing] End-to-end total: \(String(format: "%.2f", e2eTotal))s")
+    }
+
     // MARK: - Actions
 
     public func clear() {

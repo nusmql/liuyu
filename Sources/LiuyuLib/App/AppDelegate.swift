@@ -365,17 +365,25 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             let text = await transcribeForEditWindow(audioURL: audioURL)
             print("[App] Transcription complete: \(text.prefix(50))...")
             await MainActor.run {
-                // Hide panel immediately before opening Edit window
-                print("[App] Hiding panel before showing Edit window")
+                // Hide panel immediately
+                print("[App] Hiding panel")
                 panelController.hide(immediately: true)
                 // Restart hotkey after transcription
                 try? self.hotkeyManager.start()
-                // Open Edit window on next runloop to avoid layout conflicts
-                print("[App] Scheduling Edit window open")
-                DispatchQueue.main.async {
-                    print("[App] Opening Edit window")
-                    self.editController.showWithText(text) { [weak self] _ in
-                        self?.cleanupCurrentAudio()
+
+                // Check if Edit window is already open with text - if so, treat as modification instruction
+                if self.editController.isWindowVisible && self.editController.hasText {
+                    print("[App] Edit window visible with text, applying instruction: \(text)")
+                    self.editController.applyInstruction(text)
+                    self.cleanupCurrentAudio()
+                } else {
+                    // Open Edit window on next runloop to avoid layout conflicts
+                    print("[App] Scheduling Edit window open")
+                    DispatchQueue.main.async {
+                        print("[App] Opening Edit window")
+                        self.editController.showWithText(text) { [weak self] _ in
+                            self?.cleanupCurrentAudio()
+                        }
                     }
                 }
             }
