@@ -22,7 +22,9 @@ public class ShortcutRecorder: NSView {
     // MARK: - Private Properties
 
     private var isRecording = false
-    private var localMonitor: Any?
+    // Use nonisolated(unsafe) to allow cleanup in deinit
+    // The monitor is created on main thread but deinit can happen anywhere
+    nonisolated(unsafe) private var localMonitor: Any?
     private var currentFlags: CGEventFlags = []
     private var currentKeyCode: UInt16 = 0
     private var currentIncludesFnKey: Bool = false
@@ -354,11 +356,10 @@ public class ShortcutRecorder: NSView {
 
     deinit {
         // Clean up the monitor if it exists
-        // Use MainActor.assumeIsolated since NSView deinit runs on MainActor
-        MainActor.assumeIsolated {
-            if let monitor = localMonitor {
-                NSEvent.removeMonitor(monitor)
-            }
+        // NSEvent.removeMonitor is thread-safe
+        // Capture monitor locally to avoid accessing actor-isolated property in deinit
+        if let monitor = localMonitor {
+            NSEvent.removeMonitor(monitor)
         }
     }
 }

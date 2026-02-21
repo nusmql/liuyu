@@ -1,5 +1,4 @@
 import SwiftUI
-import LucideIcons
 
 struct ResultView: View {
     let text: String
@@ -10,7 +9,7 @@ struct ResultView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 10) {
-                Image(nsImage: Lucide.mic)
+                Image(nsImage: IconManager.shared.mic)
                     .resizable()
                     .frame(width: 16, height: 16)
                     .foregroundStyle(.secondary)
@@ -30,7 +29,7 @@ struct ResultView: View {
                     Label {
                         Text("Clear")
                     } icon: {
-                        Image(nsImage: Lucide.trash2)
+                        Image(nsImage: IconManager.shared.trash2)
                             .resizable()
                             .frame(width: 12, height: 12)
                     }
@@ -43,7 +42,7 @@ struct ResultView: View {
                     Label {
                         Text("Copy")
                     } icon: {
-                        Image(nsImage: Lucide.clipboardCopy)
+                        Image(nsImage: IconManager.shared.clipboardCopy)
                             .resizable()
                             .frame(width: 12, height: 12)
                     }
@@ -56,7 +55,7 @@ struct ResultView: View {
                     Label {
                         Text("Insert")
                     } icon: {
-                        Image(nsImage: Lucide.cornerDownLeft)
+                        Image(nsImage: IconManager.shared.cornerDownLeft)
                             .resizable()
                             .frame(width: 12, height: 12)
                     }

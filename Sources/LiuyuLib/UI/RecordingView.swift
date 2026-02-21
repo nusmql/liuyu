@@ -1,5 +1,4 @@
 import SwiftUI
-import LucideIcons
 
 struct RecordingView: View {
     let audioLevel: Float
@@ -42,16 +41,13 @@ struct RecordingView: View {
                     .fill(Color.weChatGreen)
                     .frame(width: 36, height: 36)
 
-                Image(nsImage: {
-                    let img = Lucide.mic.copy() as! NSImage
-                    img.isTemplate = true
-                    return img
-                }())
+                Image(nsImage: IconManager.shared.mic)
+                    .renderingMode(.template)
                     .resizable()
                     .frame(width: 16, height: 16)
                     .foregroundColor(.white)
             }
-            .frame(width: 50, height: 50)
+            .frame(width: 36, height: 36)
             .onAppear {
                 // Animate ring 1 - slower animation
                 withAnimation(.easeOut(duration: 1.5).repeatForever(autoreverses: false)) {
@@ -91,7 +87,7 @@ struct RecordingView: View {
             Button(action: {
                 onClose()
             }) {
-                Image(nsImage: Lucide.x)
+                Image(nsImage: IconManager.shared.x)
                     .resizable()
                     .frame(width: 14, height: 14)
                     .foregroundColor(.white.opacity(0.8))

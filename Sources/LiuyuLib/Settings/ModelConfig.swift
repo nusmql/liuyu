@@ -266,11 +266,11 @@ public final class ProviderConfigStore: Sendable {
     public func resolveSTT(_ assignment: ModelAssignment) -> (apiKey: String, endpoint: String, model: String, apiFormat: ApiFormat)? {
         guard let pc = provider(for: assignment) else {
             let providers = loadProviders()
-            print("[Liuyu Config] STT resolve failed: provider \(assignment.providerID) not found. Available: \(providers.map { "\($0.provider.rawValue)=\($0.id)" })")
+            Logger.error("STT resolve failed: provider \(assignment.providerID) not found. Available: \(providers.map { "\($0.provider.rawValue)=\($0.id)" })", category: .settings)
             return nil
         }
         guard let key = apiKey(for: pc), !key.isEmpty else {
-            print("[Liuyu Config] STT resolve failed: no API key for \(pc.provider.rawValue). Re-enter key in Settings.")
+            Logger.error("STT resolve failed: no API key for \(pc.provider.rawValue). Re-enter key in Settings.", category: .settings)
             return nil
         }
         let def = ProviderDefinition.catalog[pc.provider]
@@ -283,11 +283,11 @@ public final class ProviderConfigStore: Sendable {
     public func resolveLLM(_ assignment: ModelAssignment) -> (apiKey: String, endpoint: String, model: String)? {
         guard let pc = provider(for: assignment) else {
             let providers = loadProviders()
-            print("[Liuyu Config] LLM resolve failed: provider \(assignment.providerID) not found. Available: \(providers.map { "\($0.provider.rawValue)=\($0.id)" })")
+            Logger.error("LLM resolve failed: provider \(assignment.providerID) not found. Available: \(providers.map { "\($0.provider.rawValue)=\($0.id)" })", category: .settings)
             return nil
         }
         guard let key = apiKey(for: pc), !key.isEmpty else {
-            print("[Liuyu Config] LLM resolve failed: no API key for \(pc.provider.rawValue). Re-enter key in Settings.")
+            Logger.error("LLM resolve failed: no API key for \(pc.provider.rawValue). Re-enter key in Settings.", category: .settings)
             return nil
         }
         let def = ProviderDefinition.catalog[pc.provider]

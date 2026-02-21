@@ -1,5 +1,4 @@
 import SwiftUI
-import LucideIcons
 
 struct ProcessingView: View {
     @State private var rotation: Double = 0

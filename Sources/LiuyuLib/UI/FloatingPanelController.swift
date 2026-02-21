@@ -60,17 +60,17 @@ public class FloatingPanelController {
 
     public func hide(immediately: Bool = false) {
         guard let panel else {
-            print("[Panel] Hide called but no panel exists")
+            Logger.warning("Hide called but no panel exists", category: .ui)
             return
         }
 
-        print("[Panel] Hiding panel (immediately: \(immediately), isVisible: \(panel.isVisible))")
+        Logger.debug("Hiding panel (immediately: \(immediately), isVisible: \(panel.isVisible))", category: .ui)
 
         if immediately {
             // Hide immediately without animation
             panel.alphaValue = 0
             panel.orderOut(nil)
-            print("[Panel] Panel hidden immediately")
+            Logger.debug("Panel hidden immediately", category: .ui)
             return
         }
 

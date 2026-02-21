@@ -51,39 +51,39 @@ public class HotkeyManager {
     }
 
     public func start() throws {
-        print("[HotkeyManager] start() called, shortcut: \(shortcut.displayString)")
+        Logger.debug("start() called, shortcut: \(shortcut.displayString)", category: .hotkey)
         guard Self.isAccessibilityGranted else {
-            print("[HotkeyManager] ERROR: Accessibility not granted")
+            Logger.error("ERROR: Accessibility not granted", category: .hotkey)
             throw HotkeyError.accessibilityNotGranted
         }
 
         // For modifier-only or Fn+key shortcuts, use CGEventTap
         // (Carbon RegisterEventHotKey doesn't support Fn key)
         if shortcut.isModifierOnly || shortcut.includesFnKey {
-            print("[HotkeyManager] Using EventTap for shortcut")
+            Logger.info("Using EventTap for shortcut", category: .hotkey)
             try startEventTap()
         } else {
-            print("[HotkeyManager] Using Global HotKey for key combination")
+            Logger.info("Using Global HotKey for key combination", category: .hotkey)
             try startGlobalHotKey()
         }
     }
 
     public func stop() {
-        print("[HotkeyManager] stop() called")
+        Logger.debug("stop() called", category: .hotkey)
         if let hotKeyRef = hotKeyRef {
-            print("[HotkeyManager] Unregistering hotkey")
+            Logger.debug("Unregistering hotkey", category: .hotkey)
             UnregisterEventHotKey(hotKeyRef)
             self.hotKeyRef = nil
         }
 
         // Disable and clean up EventTap
         if let tap = eventTap {
-            print("[HotkeyManager] Disabling EventTap")
+            Logger.debug("Disabling EventTap", category: .hotkey)
             CGEvent.tapEnable(tap: tap, enable: false)
             self.eventTap = nil
         }
         if let source = runLoopSource {
-            print("[HotkeyManager] Removing runloop source")
+            Logger.debug("Removing runloop source", category: .hotkey)
             CFRunLoopRemoveSource(CFRunLoopGetCurrent(), source, .commonModes)
             self.runLoopSource = nil
         }
@@ -93,7 +93,7 @@ public class HotkeyManager {
         eventHandlerInstalled = false
 
         isKeyDown = false
-        print("[HotkeyManager] stop() complete")
+        Logger.debug("stop() complete", category: .hotkey)
     }
 
     // MARK: - Global HotKey (for key combinations)
@@ -108,14 +108,14 @@ public class HotkeyManager {
             let manager = Unmanaged<HotkeyManager>.fromOpaque(userData).takeUnretainedValue()
 
             let eventKind = GetEventKind(event)
-            print("[HotkeyManager] Event received: \(eventKind)")
+            Logger.debug("Event received: \(eventKind)", category: .hotkey)
 
             switch eventKind {
             case UInt32(kEventHotKeyPressed):
-                print("[HotkeyManager] Hotkey PRESSED")
+                Logger.debug("Hotkey PRESSED", category: .hotkey)
                 manager.events.send(.keyDown)
             case UInt32(kEventHotKeyReleased):
-                print("[HotkeyManager] Hotkey RELEASED")
+                Logger.debug("Hotkey RELEASED", category: .hotkey)
                 manager.events.send(.keyUp)
             default:
                 break
@@ -214,15 +214,15 @@ public class HotkeyManager {
         let targetFlags = shortcut.flags
         let modifierMatch = flags.intersection(targetFlags) == targetFlags
 
-        print("[HotkeyManager] FlagsChanged - flags: \(flags.rawValue), target: \(targetFlags.rawValue), match: \(modifierMatch), isKeyDown: \(isKeyDown)")
+        Logger.debug("FlagsChanged - flags: \(flags.rawValue), target: \(targetFlags.rawValue), match: \(modifierMatch), isKeyDown: \(isKeyDown)", category: .hotkey)
 
         if modifierMatch && !isKeyDown {
-            print("[HotkeyManager] Modifier-only KEY DOWN")
+            Logger.debug("Modifier-only KEY DOWN", category: .hotkey)
             isKeyDown = true
             events.send(.keyDown)
             return nil
         } else if !modifierMatch && isKeyDown {
-            print("[HotkeyManager] Modifier-only KEY UP")
+            Logger.debug("Modifier-only KEY UP", category: .hotkey)
             isKeyDown = false
             events.send(.keyUp)
             return nil
@@ -249,17 +249,17 @@ public class HotkeyManager {
         let keyMatch = keyCode == targetKeyCode
 
         // Debug logging
-        print("[HotkeyManager] \(event.type == .keyDown ? "keyDown" : "keyUp") - keyCode: \(keyCode), target: \(targetKeyCode), modMatch: \(modifierMatch), fnMatch: \(fnMatch), isKeyDown: \(isKeyDown)")
+        Logger.debug("\(event.type == .keyDown ? "keyDown" : "keyUp") - keyCode: \(keyCode), target: \(targetKeyCode), modMatch: \(modifierMatch), fnMatch: \(fnMatch), isKeyDown: \(isKeyDown)", category: .hotkey)
 
         if event.type == .keyDown {
             if modifierMatch && keyMatch && fnMatch {
                 // Don't re-trigger if already recording (for EventTap-based shortcuts)
                 if isRecording {
-                    print("[HotkeyManager] KeyDown ignored - already recording")
+                    Logger.debug("KeyDown ignored - already recording", category: .hotkey)
                     return nil
                 }
                 if !isKeyDown {
-                    print("[HotkeyManager] Key combination DOWN -> sending event")
+                    Logger.debug("Key combination DOWN -> sending event", category: .hotkey)
                     isKeyDown = true
                     events.send(.keyDown)
                 }
@@ -269,7 +269,7 @@ public class HotkeyManager {
             // On keyUp, only check if the key matches and we were in keyDown state
             // Don't check modifiers - user may have released them before the key
             if keyMatch && isKeyDown {
-                print("[HotkeyManager] Key combination UP -> sending event")
+                Logger.debug("Key combination UP -> sending event", category: .hotkey)
                 isKeyDown = false
                 events.send(.keyUp)
                 return nil

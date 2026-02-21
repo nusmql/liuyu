@@ -1,6 +1,5 @@
 // Sources/LiuyuLib/Edit/EditView.swift
 import SwiftUI
-import LucideIcons
 
 struct EditView: View {
     @StateObject private var viewModel: EditViewModel
@@ -145,11 +144,8 @@ struct EditView: View {
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
 
-            Image(nsImage: {
-                    let img = Lucide.mic.copy() as! NSImage
-                    img.isTemplate = true
-                    return img
-                }())
+            Image(nsImage: IconManager.shared.mic)
+                .renderingMode(.template)
                 .resizable()
                 .frame(width: 28, height: 28)
                 .foregroundStyle(.white)
@@ -170,14 +166,11 @@ struct EditView: View {
                     .frame(width: 80, height: 80)
 
                 // Mic icon
-                Image(nsImage: {
-                    let img = Lucide.mic.copy() as! NSImage
-                    img.isTemplate = true
-                    return img
-                }())
-                .resizable()
-                .frame(width: 28, height: 28)
-                .foregroundColor(.white)
+                Image(nsImage: IconManager.shared.mic)
+                    .renderingMode(.template)
+                    .resizable()
+                    .frame(width: 28, height: 28)
+                    .foregroundColor(.white)
             }
 
             Text("Release to send")
@@ -220,7 +213,7 @@ struct EditView: View {
                 Label {
                     Text(clearButtonLabel)
                 } icon: {
-                    Image(nsImage: Lucide.trash2)
+                    Image(nsImage: IconManager.shared.trash2)
                         .resizable()
                         .frame(width: 16, height: 16)
                 }
@@ -234,7 +227,7 @@ struct EditView: View {
                 Label {
                     Text("Copy (⌘C)")
                 } icon: {
-                    Image(nsImage: Lucide.clipboardCopy)
+                    Image(nsImage: IconManager.shared.clipboardCopy)
                         .resizable()
                         .frame(width: 16, height: 16)
                 }
@@ -251,7 +244,7 @@ struct EditView: View {
                 Label {
                     Text("Insert")
                 } icon: {
-                    Image(nsImage: Lucide.cornerDownLeft)
+                    Image(nsImage: IconManager.shared.cornerDownLeft)
                         .resizable()
                         .frame(width: 16, height: 16)
                 }

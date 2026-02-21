@@ -13,6 +13,9 @@ public class WindowController: NSObject, NSWindowDelegate {
 
     /// Called when the window closes.
     public var onWindowClose: (() -> Void)?
+    
+    /// Called when the window is shown.
+    public var onWindowShow: (() -> Void)?
 
     /// Returns true if the window is currently visible.
     public var isWindowVisible: Bool {
@@ -59,9 +62,10 @@ public class WindowController: NSObject, NSWindowDelegate {
         window.delegate = self
         window.center()
 
-        NSApp.setActivationPolicy(.regular)
+        // NSApp.setActivationPolicy(.regular) // Removed to keep dock icon hidden
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        onWindowShow?()
 
         self.window = window
     }

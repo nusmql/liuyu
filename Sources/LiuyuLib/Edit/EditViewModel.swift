@@ -60,7 +60,7 @@ public class EditViewModel: ObservableObject {
             do {
                 try self?.recordingController.warmUp()
             } catch {
-                print("[Liuyu Audio] Pre-warm failed (will retry on first recording): \(error.localizedDescription)")
+                Logger.warning("Pre-warm failed (will retry on first recording): \(error.localizedDescription)", category: .audio)
             }
         }
     }
@@ -75,7 +75,7 @@ public class EditViewModel: ObservableObject {
             try recordingController.start()
             recordingStartTime = Date()
             editState = .recording(audioLevel: 0)
-            print("[Liuyu Timing] Recording started")
+            Logger.debug("Recording started", category: .app)
         } catch {
             recordingFailed = true
             errorMessage = error.localizedDescription
@@ -120,7 +120,7 @@ public class EditViewModel: ObservableObject {
         }
 
         let recordingDuration = Date().timeIntervalSince(recordingStartTime ?? Date())
-        print("[Liuyu Timing] Recording stopped — duration: \(String(format: "%.2f", recordingDuration))s")
+        Logger.debug("Recording stopped — duration: \(String(format: "%.2f", recordingDuration))s", category: .app)
 
         currentAudioURL = audioURL
         await processAudio(audioURL: audioURL)
@@ -137,20 +137,20 @@ public class EditViewModel: ObservableObject {
             editState = .idle
             return
         }
-        print("[Liuyu Timing] STT completed — \(String(format: "%.2f", Date().timeIntervalSince(sttStart)))s — \"\(transcribedText.prefix(80))\"")
+        Logger.debug("STT completed — \(String(format: "%.2f", Date().timeIntervalSince(sttStart)))s — \"\(transcribedText.prefix(80))\"", category: .stt)
 
         // Step 2: If there's existing text, send to LLM for editing
         if hasText {
             let llmStart = Date()
             await editWithLLM(instruction: transcribedText, feature: feature)
-            print("[Liuyu Timing] LLM edit completed — \(String(format: "%.2f", Date().timeIntervalSince(llmStart)))s")
+            Logger.debug("LLM edit completed — \(String(format: "%.2f", Date().timeIntervalSince(llmStart)))s", category: .stt)
         } else {
             text = transcribedText
             editState = .idle
         }
 
         let e2eTotal = Date().timeIntervalSince(e2eStartTime ?? Date())
-        print("[Liuyu Timing] End-to-end total: \(String(format: "%.2f", e2eTotal))s")
+        Logger.info("End-to-end total: \(String(format: "%.2f", e2eTotal))s", category: .app)
 
         cleanupAudio()
     }
@@ -189,11 +189,11 @@ public class EditViewModel: ObservableObject {
         do {
             let apiStart = Date()
             let text = try await service.transcribe(audioFileURL: audioURL)
-            print("[Liuyu Timing] STT API call [\(params.model)] — \(String(format: "%.2f", Date().timeIntervalSince(apiStart)))s")
+            Logger.debug("STT API call [\(params.model)] — \(String(format: "%.2f", Date().timeIntervalSince(apiStart)))s", category: .stt)
             return (text, nil)
         } catch {
             let detail = "[\(params.model)] \(error.localizedDescription)"
-            print("[Liuyu STT] \(detail) | endpoint=\(params.endpoint)")
+            Logger.error("\(detail) | endpoint=\(params.endpoint)", category: .stt)
             return (nil, detail)
         }
     }
@@ -254,7 +254,7 @@ public class EditViewModel: ObservableObject {
         )
         let apiStart = Date()
         let result = try? await service.chat(system: systemPrompt, user: userMessage)
-        print("[Liuyu Timing] LLM API call [\(params.model)] — \(String(format: "%.2f", Date().timeIntervalSince(apiStart)))s")
+        Logger.debug("LLM API call [\(params.model)] — \(String(format: "%.2f", Date().timeIntervalSince(apiStart)))s", category: .stt)
         return result
     }
 
@@ -273,7 +273,7 @@ public class EditViewModel: ObservableObject {
         await editWithLLM(instruction: instruction, feature: feature)
 
         let e2eTotal = Date().timeIntervalSince(e2eStartTime ?? Date())
-        print("[Liuyu Timing] End-to-end total: \(String(format: "%.2f", e2eTotal))s")
+        Logger.info("End-to-end total: \(String(format: "%.2f", e2eTotal))s", category: .app)
     }
 
     // MARK: - Actions

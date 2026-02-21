@@ -23,6 +23,9 @@ class EditWindowController: NSObject, NSWindowDelegate {
 
     /// Called when any managed window closes, to decide activation policy.
     var onWindowClose: (() -> Void)?
+    
+    /// Called when the window is shown.
+    var onWindowShow: (() -> Void)?
 
     func show() {
         showWithText("") { _ in }
@@ -75,9 +78,10 @@ class EditWindowController: NSObject, NSWindowDelegate {
         window.isReleasedWhenClosed = false
         window.delegate = self
 
-        NSApp.setActivationPolicy(.regular)
+        // NSApp.setActivationPolicy(.regular) // Removed to keep dock icon hidden
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        onWindowShow?()
 
         self.window = window
     }

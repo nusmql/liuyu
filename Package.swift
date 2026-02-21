@@ -5,19 +5,23 @@ let package = Package(
     name: "Liuyu",
     platforms: [.macOS(.v13)],
     dependencies: [
-        .package(url: "https://github.com/JakubMazur/lucide-icons-swift.git", from: "0.563.1")
     ],
     targets: [
         // Library target with all app logic (testable)
         .target(
             name: "LiuyuLib",
             dependencies: [
-                .product(name: "LucideIcons", package: "lucide-icons-swift")
             ],
             path: "Sources/LiuyuLib",
-            // Resources excluded from SPM (Info.plist forbidden as SPM resource);
-            // copied into .app bundle by scripts/bundle.sh instead
-            exclude: ["Resources"]
+            // Resources: explicitly process images, exclude build/metadata files
+            exclude: [
+                "Resources/Info.plist", 
+                "Resources/AppIcon.icns", 
+                "Resources/Liuyu.entitlements"
+            ],
+            resources: [
+                .process("Resources")
+            ]
         ),
         // Executable target with just the entry point
         .executableTarget(

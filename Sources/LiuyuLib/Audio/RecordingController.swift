@@ -18,7 +18,7 @@ public class RecordingController: ObservableObject {
     fileprivate let audioState = AudioState()
 
     /// Threshold for detecting speech activity (normalized 0-1)
-    private let speechThreshold: Float = 0.15
+    private let speechThreshold: Float = 0.25 // Increased from 0.15 (~-42dB) to 0.25 (~-37dB) to ignore background noise
     /// Time of last audio activity above threshold
     public private(set) var lastAudioActivityTime: Date?
     /// Whether there has been recent audio activity
@@ -40,10 +40,10 @@ public class RecordingController: ObservableObject {
                 if self.audioState.isRecording {
                     // Don't destroy active recording — re-warm after stop()
                     self.needsRewarm = true
-                    print("[Liuyu Audio] Audio device changed during recording — will re-warm after stop")
+                    Logger.warning("Audio device changed during recording — will re-warm after stop", category: .audio)
                     return
                 }
-                print("[Liuyu Audio] Audio device changed — re-warming engine")
+                Logger.info("Audio device changed — re-warming engine", category: .audio)
                 self.coolDown()
                 try? self.warmUp()
             }
@@ -91,7 +91,7 @@ public class RecordingController: ObservableObject {
         let inputFormat = inputNode.outputFormat(forBus: 0)
 
         guard inputFormat.sampleRate > 0 else {
-            print("[Liuyu Audio] No audio input available (sample rate = 0)")
+            Logger.error("No audio input available (sample rate = 0)", category: .audio)
             return
         }
 
@@ -110,7 +110,7 @@ public class RecordingController: ObservableObject {
         do {
             try engine.start()
             isWarmedUp = true
-            print("[Liuyu Audio] Engine warmed up — pre-roll buffering active")
+            Logger.info("Engine warmed up — pre-roll buffering active", category: .audio)
         } catch {
             inputNode.removeTap(onBus: 0)
             engine.stop()
@@ -129,7 +129,7 @@ public class RecordingController: ObservableObject {
         converter = nil
         isWarmedUp = false
         audioState.clear()
-        print("[Liuyu Audio] Engine cooled down")
+        Logger.info("Engine cooled down", category: .audio)
     }
 
     // MARK: - Recording
@@ -183,7 +183,7 @@ public class RecordingController: ObservableObject {
         if let url = tempFileURL,
            let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
            let size = attrs[.size] as? Int {
-            print("[Liuyu Audio] WAV file: \(size) bytes at \(url.lastPathComponent)")
+            Logger.debug("WAV file: \(size) bytes at \(url.lastPathComponent)", category: .audio)
         }
 
         audioLevel = 0.0
@@ -191,7 +191,7 @@ public class RecordingController: ObservableObject {
         // Re-warm if audio device changed during recording
         if needsRewarm {
             needsRewarm = false
-            print("[Liuyu Audio] Deferred re-warm — applying now")
+            Logger.info("Deferred re-warm — applying now", category: .audio)
             coolDown()
             try? warmUp()
         }
@@ -240,8 +240,9 @@ public class RecordingController: ObservableObject {
             Task { @MainActor [weak self] in
                 self?.audioLevel = normalized
                 // Track audio activity for smart timeout
-                if normalized > (self?.speechThreshold ?? 0.15) {
+                if normalized > (self?.speechThreshold ?? 0.25) {
                     self?.lastAudioActivityTime = Date()
+                    Logger.debug("Activity detected: \(String(format: "%.2f", normalized))", category: .audio)
                 }
             }
         }
@@ -330,7 +331,7 @@ fileprivate final class AudioState: @unchecked Sendable {
         lock.unlock()
 
         if preRollCount > 0 {
-            print("[Liuyu Audio] Flushed \(preRollCount) pre-roll buffers (~\(preRollCount * 21)ms)")
+            Logger.debug("Flushed \(preRollCount) pre-roll buffers (~\(preRollCount * 21)ms)", category: .audio)
         }
     }
 
