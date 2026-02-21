@@ -439,9 +439,15 @@ private struct EditViewKeyboardHandler: ViewModifier {
     private func matchesRecordShortcut(_ event: NSEvent) -> Bool {
         let shortcut = recordShortcut
 
-        // Check key code matches
-        guard event.keyCode == shortcut.keyCode else {
-            return false
+        // Debug logging
+        Logger.debug("Checking shortcut: keyCode(event:\(event.keyCode), target:\(shortcut.keyCode)), flags:\(shortcut.flags)", category: .hotkey)
+
+        // For modifier-only shortcuts (like Fn+Ctrl), keyCode is 0
+        // We only check keyCode if shortcut has a specific key
+        if shortcut.keyCode != 0 {
+            guard event.keyCode == shortcut.keyCode else {
+                return false
+            }
         }
 
         // Check modifier flags match
@@ -458,6 +464,9 @@ private struct EditViewKeyboardHandler: ViewModifier {
         let fnKeyPressed = event.modifierFlags.contains(.function)
         let fnMatch = shortcut.includesFnKey == fnKeyPressed
 
-        return eventModifiers == shortcutModifiers && fnMatch
+        let modifiersMatch = eventModifiers == shortcutModifiers
+        Logger.debug("Modifiers match: \(modifiersMatch), Fn match: \(fnMatch)", category: .hotkey)
+
+        return modifiersMatch && fnMatch
     }
 }
