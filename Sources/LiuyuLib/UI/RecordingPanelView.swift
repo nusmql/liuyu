@@ -6,8 +6,8 @@ struct RecordingPanelView: View {
     let state: PanelState
     let onClose: () -> Void
 
-    // Animation states
-    @State private var ringScales: [CGFloat] = [2.5, 2.5, 2.5]
+    // Animation states - rings only 10% larger than center circle
+    @State private var ringScales: [CGFloat] = [1.1, 1.1, 1.1]
     @State private var ringOpacities: [Double] = [0.5, 0.5, 0.5]
     @State private var arrowRotation: Double = 0
     @State private var showMic: Bool = true
@@ -107,13 +107,13 @@ struct RecordingPanelView: View {
         // Recording: rings contract from outside to inside
         for i in 0..<3 {
             DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 0.3) {
-                // Start from expanded
-                ringScales[i] = 2.5
+                // Start from expanded (10% larger)
+                ringScales[i] = 1.1
                 ringOpacities[i] = 0.5
 
-                // Animate inward (contracting)
+                // Animate inward (contracting) - from 1.1 to 0.9
                 withAnimation(.easeIn(duration: 1.0).repeatForever(autoreverses: false)) {
-                    ringScales[i] = 0.8
+                    ringScales[i] = 0.9
                     ringOpacities[i] = 0
                 }
             }
