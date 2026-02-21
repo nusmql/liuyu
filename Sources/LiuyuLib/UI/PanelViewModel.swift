@@ -1,7 +1,7 @@
 import AppKit
 import Combine
 
-public enum PanelState {
+public enum PanelState: Equatable {
     case hidden
     case recording(audioLevel: Float)
     case processing

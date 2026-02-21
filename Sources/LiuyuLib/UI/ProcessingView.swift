@@ -2,24 +2,24 @@ import SwiftUI
 
 struct ProcessingView: View {
     @State private var rotation: Double = 0
+    @State private var isAnimating = false
 
     var body: some View {
         HStack(spacing: 16) {
             // Rotating arc only (no mic)
-            TimelineView(.animation(minimumInterval: 1/60, paused: false)) { _ in
-                Circle()
-                    .trim(from: 0, to: 0.75)
-                    .stroke(Color.weChatGreen, style: StrokeStyle(lineWidth: 4, lineCap: .round))
-                    .frame(width: 44, height: 44)
-                    .rotationEffect(.degrees(rotation))
-            }
-            .frame(width: 50, height: 50)
-            .onAppear {
-                // Start a continuous rotation animation
-                withAnimation(.linear(duration: 1.0).repeatForever(autoreverses: false)) {
-                    rotation = 360
+            Circle()
+                .trim(from: 0, to: 0.75)
+                .stroke(Color.weChatGreen, style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                .frame(width: 44, height: 44)
+                .rotationEffect(.degrees(isAnimating ? 360 : 0))
+                .animation(.linear(duration: 1.0).repeatForever(autoreverses: false), value: isAnimating)
+                .frame(width: 50, height: 50)
+                .onAppear {
+                    // Delay slightly to ensure view is rendered before starting animation
+                    DispatchQueue.main.async {
+                        isAnimating = true
+                    }
                 }
-            }
 
             VStack(alignment: .leading, spacing: 4) {
                 Text("Processing...")

@@ -358,6 +358,9 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Minimum time to show processing UI (in seconds)
+    private static let minProcessingDisplayTime: TimeInterval = 1.5
+
     /// Called when RecordingState enters .processing phase
     private func stopRecordingUI() {
         Logger.debug("Stopping recording UI", category: .app)
@@ -371,13 +374,23 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
         currentAudioFileURL = audioURL
         Logger.info("Stopped recording, showing processing", category: .app)
+        let processingStartTime = Date()
         panelController.viewModel.showProcessing()
+        Logger.debug("Processing UI should be visible now", category: .ui)
 
         Task {
             // Small delay to ensure processing UI is rendered
             try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
 
             let text = await transcribeForEditWindow(audioURL: audioURL)
+
+            // Ensure minimum display time for processing UI
+            let elapsed = Date().timeIntervalSince(processingStartTime)
+            let remaining = Self.minProcessingDisplayTime - elapsed
+            if remaining > 0 {
+                Logger.debug("Waiting \(String(format: "%.2f", remaining))s for minimum processing display time", category: .ui)
+                try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
+            }
 
             await MainActor.run {
                 recordingState.transition(to: .completed(text))
