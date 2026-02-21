@@ -392,6 +392,9 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         // Hide panel immediately
         panelController.hide(immediately: true)
 
+        // Reset state to idle so next shortcut works
+        recordingState.transition(to: .idle)
+
         // Check if Edit window is already open with text
         if editController.isWindowVisible && editController.hasText {
             Logger.info("Edit window visible with text, applying instruction", category: .ui)
@@ -412,6 +415,8 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     private func showError(_ message: String) {
         Logger.error("Recording error: \(message)", category: .app)
         panelController.hide()
+        // Reset state to idle so next shortcut works
+        recordingState.transition(to: .idle)
         // Could show an alert here
     }
 
