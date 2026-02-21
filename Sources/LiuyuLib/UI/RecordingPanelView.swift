@@ -1,13 +1,13 @@
 // Sources/LiuyuLib/UI/RecordingPanelView.swift
 import SwiftUI
+import Foundation
 
 /// Combined view that handles both recording and processing states with smooth transition
 struct RecordingPanelView: View {
-    let state: PanelState
-    let onClose: () -> Void
+    @ObservedObject var viewModel: PanelViewModel
 
-    // Animation states - rings only 10% larger than center circle
-    @State private var ringScales: [CGFloat] = [1.1, 1.1, 1.1]
+    // Animation states - rings 20% larger than center circle
+    @State private var ringScales: [CGFloat] = [1.2, 1.2, 1.2]
     @State private var ringOpacities: [Double] = [0.5, 0.5, 0.5]
     @State private var arrowRotation: Double = 0
     @State private var showMic: Bool = true
@@ -55,13 +55,13 @@ struct RecordingPanelView: View {
             .onAppear {
                 startAnimation()
             }
-            .onChange(of: state) { newState in
+            .onChange(of: viewModel.state) { newState in
                 handleStateChange(newState)
             }
 
             // Text content
             VStack(alignment: .leading, spacing: 4) {
-                switch state {
+                switch viewModel.state {
                 case .recording:
                     Text("Recording...")
                         .font(.system(size: 14, weight: .medium))
@@ -84,8 +84,8 @@ struct RecordingPanelView: View {
             Spacer()
 
             // Close button (only during recording)
-            if case .recording = state {
-                Button(action: onClose) {
+            if case .recording = viewModel.state {
+                Button(action: viewModel.cancel) {
                     Image(nsImage: IconManager.shared.x)
                         .resizable()
                         .frame(width: 14, height: 14)
@@ -104,16 +104,21 @@ struct RecordingPanelView: View {
     }
 
     private func startAnimation() {
+        // Reset state for recording
+        showMic = true
+        showArrow = false
+        arrowRotation = 0
+
         // Recording: rings contract from outside to inside
         for i in 0..<3 {
             DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 0.3) {
-                // Start from expanded (10% larger)
-                ringScales[i] = 1.1
+                // Start from expanded (20% larger)
+                ringScales[i] = 1.2
                 ringOpacities[i] = 0.5
 
-                // Animate inward (contracting) - from 1.1 to 0.9
+                // Animate inward (contracting) - from 1.2 to 1.0
                 withAnimation(.easeIn(duration: 1.0).repeatForever(autoreverses: false)) {
-                    ringScales[i] = 0.9
+                    ringScales[i] = 1.0
                     ringOpacities[i] = 0
                 }
             }
@@ -124,17 +129,31 @@ struct RecordingPanelView: View {
         switch newState {
         case .processing:
             // Processing: mic fades out, arrow fades in and rotates
-            withAnimation(.easeOut(duration: 0.3)) {
-                showMic = false
+            Logger.debug("Switching to processing state", category: .ui)
+
+            // Stop ring animations
+            for i in 0..<3 {
+                ringScales[i] = 1.0
+                ringOpacities[i] = 0
             }
 
-            // Show arrow and start rotation
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            // Hide mic and show arrow with animation
+            withAnimation(.easeOut(duration: 0.3)) {
+                showMic = false
                 showArrow = true
-                withAnimation(.linear(duration: 1.0).repeatForever(autoreverses: false)) {
-                    arrowRotation = 360
-                }
             }
+
+            // Start arrow rotation
+            withAnimation(.linear(duration: 1.0).repeatForever(autoreverses: false)) {
+                arrowRotation = 360
+            }
+
+        case .recording:
+            // Reset for recording state
+            Logger.debug("Switching to recording state", category: .ui)
+            showMic = true
+            showArrow = false
+            arrowRotation = 0
 
         default:
             break
