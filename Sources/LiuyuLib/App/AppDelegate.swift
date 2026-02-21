@@ -408,11 +408,14 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         // Reset state to idle so next shortcut works
         recordingState.transition(to: .idle)
 
-        // Check if Edit window is already open with text
-        if editController.isWindowVisible && editController.hasText {
-            Logger.info("Edit window visible with text, applying instruction", category: .ui)
-            editController.applyInstruction(text)
-            cleanupCurrentAudio()
+        // Check if Edit window is already open
+        if editController.isWindowVisible {
+            // Clear previous text and show new result
+            Logger.info("Edit window visible, clearing and showing new result", category: .ui)
+            editController.clear()
+            editController.showWithText(text) { [weak self] _ in
+                self?.cleanupCurrentAudio()
+            }
         } else {
             // Open Edit window on next runloop
             DispatchQueue.main.async { [weak self] in

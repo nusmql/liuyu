@@ -101,6 +101,11 @@ class EditWindowController: NSObject, NSWindowDelegate {
         }
     }
 
+    /// Clears the current text in the edit window.
+    func clear() {
+        editViewModel?.clear()
+    }
+
     func windowWillClose(_ notification: Notification) {
         onWindowClose?()
     }
