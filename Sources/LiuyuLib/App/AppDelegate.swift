@@ -379,26 +379,34 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         Logger.debug("Processing UI should be visible now", category: .ui)
 
         Task {
-            // Small delay to ensure processing UI is rendered
-            try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
+            do {
+                // Small delay to ensure processing UI is rendered
+                try await Task.sleep(nanoseconds: 100_000_000) // 100ms
 
-            let text = await transcribeForEditWindow(audioURL: audioURL)
+                let text = await transcribeForEditWindow(audioURL: audioURL)
 
-            // Ensure minimum display time for processing UI
-            let elapsed = Date().timeIntervalSince(processingStartTime)
-            let remaining = Self.minProcessingDisplayTime - elapsed
-            if remaining > 0 {
-                Logger.debug("Waiting \(String(format: "%.2f", remaining))s for minimum processing display time", category: .ui)
-                try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
-            }
+                // Ensure minimum display time for processing UI
+                let elapsed = Date().timeIntervalSince(processingStartTime)
+                let remaining = Self.minProcessingDisplayTime - elapsed
+                if remaining > 0 {
+                    Logger.debug("Waiting \(String(format: "%.2f", remaining))s for minimum processing display time", category: .ui)
+                    try await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
+                }
 
-            await MainActor.run {
-                recordingState.transition(to: .completed(text))
+                await MainActor.run {
+                    recordingState.transition(to: .completed(text))
+                }
+            } catch {
+                Logger.error("Error during transcription: \(error)", category: .app)
+                await MainActor.run {
+                    recordingState.transition(to: .completed("Transcription failed: \(error.localizedDescription)"))
+                }
             }
         }
     }
 
     /// Called when RecordingState enters .completed phase
+    /// Uses TranscriptionPresenter actor to ensure thread-safe, ordered presentation
     private func showTranscriptionResult(_ text: String) {
         Logger.info("Showing transcription result", category: .stt)
 
@@ -408,37 +416,55 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         // Reset state to idle so next shortcut works
         recordingState.transition(to: .idle)
 
-        // Check if Edit window is already open
-        if editController.isWindowVisible {
-            // Clear previous text and show new result
-            Logger.info("Edit window visible, clearing and showing new result", category: .ui)
-            editController.clear()
-            editController.showWithText(text) { [weak self] _ in
-                self?.cleanupCurrentAudio()
-            }
-        } else {
-            // Open Edit window on next runloop
-            DispatchQueue.main.async { [weak self] in
-                Logger.info("Opening Edit window", category: .ui)
-                self?.editController.showWithText(text) { [weak self] _ in
-                    self?.cleanupCurrentAudio()
+        // Use Actor to ensure serial presentation of results
+        Task {
+            await TranscriptionPresenter.shared.present(text) { [weak self] resultText in
+                guard let self else { return }
+                await self.presentTranscriptionResult(resultText)
+                await MainActor.run {
+                    self.cleanupCurrentAudio()
                 }
             }
+        }
+    }
+
+    /// Presents the transcription result to the user.
+    /// Must be called from MainActor since it accesses UI.
+    @MainActor
+    private func presentTranscriptionResult(_ text: String) async {
+        // Check if Edit window is already open
+        if editController.isWindowVisible {
+            Logger.info("Edit window visible, clearing and showing new result", category: .ui)
+            editController.clear()
+            editController.showWithText(text) { _ in }
+        } else {
+            Logger.info("Opening Edit window", category: .ui)
+            editController.showWithText(text) { _ in }
         }
     }
 
     /// Called when RecordingState enters .error phase
     private func showError(_ message: String) {
         Logger.error("Recording error: \(message)", category: .app)
-        panelController.hide()
+        // Ensure panel is hidden immediately
+        panelController.hide(immediately: true)
         // Reset state to idle so next shortcut works
         recordingState.transition(to: .idle)
+        // Clean up any remaining audio file
+        cleanupCurrentAudio()
         // Could show an alert here
     }
 
     private func tryTranscribe(assignment: ModelAssignment, audioURL: URL) async -> (String?, String?) {
         guard let params = providerStore.resolveSTT(assignment) else {
+            Logger.error("Could not resolve STT provider for assignment", category: .stt)
             return (nil, "Could not resolve provider. Check API key.")
+        }
+
+        // Double-check file exists before transcription
+        guard FileManager.default.fileExists(atPath: audioURL.path) else {
+            Logger.error("Audio file missing before transcription: \(audioURL.path)", category: .audio)
+            return (nil, "Recording file not found.")
         }
 
         let language = UserDefaults.standard.string(forKey: "language") ?? "auto"
@@ -451,12 +477,13 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         do {
+            Logger.info("Starting transcription with \(params.model)", category: .stt)
             let text = try await service.transcribe(audioFileURL: audioURL)
+            Logger.info("Transcription completed successfully", category: .stt)
             return (text, nil)
         } catch {
-            let detail = "[\(params.model)] \(error.localizedDescription)"
-            Logger.error("\(detail) | endpoint=\(params.endpoint)", category: .stt)
-            return (nil, detail)
+            Logger.error("[\(params.model)] \(error.localizedDescription) | endpoint=\(params.endpoint)", category: .stt)
+            return (nil, error.localizedDescription)
         }
     }
 
@@ -472,21 +499,39 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func handlePanelAction(_ action: PanelAction) {
-        cleanupCurrentAudio()
+        // Don't clean up audio here - let the normal flow handle it
+        // to prevent file deletion during transcription
         recordingState.cancel()
+        panelController.hide(immediately: true)
     }
 
     private func transcribeForEditWindow(audioURL: URL) async -> String {
+        // Verify audio file exists before attempting transcription
+        guard FileManager.default.fileExists(atPath: audioURL.path) else {
+            Logger.error("Audio file does not exist at path: \(audioURL.path)", category: .audio)
+            return "Error: Recording file not found. Please try again."
+        }
+
         let feature = providerStore.loadFeatureConfig()
         guard let sttAssignment = feature.sttPrimary else {
             return "Error: No STT model configured. Open Settings."
         }
+
         let (primaryText, primaryError) = await tryTranscribe(assignment: sttAssignment, audioURL: audioURL)
         if let primaryText { return primaryText }
+
+        // Try fallback if primary fails
         if let fallback = feature.sttFallback {
-            let (fallbackText, _) = await tryTranscribe(assignment: fallback, audioURL: audioURL)
+            // Check file still exists before fallback
+            guard FileManager.default.fileExists(atPath: audioURL.path) else {
+                Logger.error("Audio file deleted during transcription", category: .audio)
+                return "Error: Recording was cancelled."
+            }
+            let (fallbackText, fallbackError) = await tryTranscribe(assignment: fallback, audioURL: audioURL)
             if let fallbackText { return fallbackText }
+            return fallbackError ?? "Fallback transcription failed."
         }
+
         return primaryError ?? "Transcription failed. Check Settings."
     }
 

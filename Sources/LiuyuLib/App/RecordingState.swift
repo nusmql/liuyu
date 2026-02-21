@@ -103,8 +103,20 @@ public final class RecordingState: ObservableObject {
 
     // MARK: - Public Actions
 
+    /// Notification to reset transcription result flag
+    public static let resetTranscriptionFlag = Notification.Name("resetTranscriptionFlag")
+
     /// Called when hotkey is pressed
     public func keyDown() {
+        // Fail-safe: if stuck in completed/error state, force reset to idle
+        if case .completed = phase {
+            Logger.warning("Fail-safe: resetting from completed state to idle", category: .app)
+            cancel()
+        } else if case .error = phase {
+            Logger.warning("Fail-safe: resetting from error state to idle", category: .app)
+            cancel()
+        }
+
         guard phase == .idle else {
             Logger.debug("Ignoring keyDown, current phase: \(phase)", category: .app)
             return

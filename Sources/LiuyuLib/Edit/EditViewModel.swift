@@ -25,6 +25,11 @@ public class EditViewModel: ObservableObject {
     private let minimumRecordingDuration: TimeInterval = 0.3
     private var e2eStartTime: Date?
 
+    // Silence timeout
+    private var silenceCheckTimer: Timer?
+    private var lastAudioActivity: Date?
+    private var silenceTimeout: TimeInterval { TimeInterval(UserDefaults.standard.integer(forKey: "silenceTimeout")) }
+
     public var hasText: Bool { !text.isEmpty }
 
     public var micButtonLabel: String {
@@ -49,6 +54,7 @@ public class EditViewModel: ObservableObject {
             .sink { [weak self] level in
                 guard let self, case .recording = self.editState else { return }
                 self.editState = .recording(audioLevel: level)
+                self.updateAudioActivity(level: level)
             }
             .store(in: &cancellables)
 
@@ -65,20 +71,61 @@ public class EditViewModel: ObservableObject {
         }
     }
 
+    private func updateAudioActivity(level: Float) {
+        let threshold: Float = 0.25
+        if level > threshold {
+            lastAudioActivity = Date()
+        }
+    }
+
+    private func startSilenceDetection() {
+        silenceCheckTimer?.invalidate()
+        lastAudioActivity = Date()
+        guard silenceTimeout > 0 else { return }
+        silenceCheckTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.checkSilenceTimeout()
+            }
+        }
+    }
+
+    private func checkSilenceTimeout() {
+        guard case .recording = editState,
+              let lastActivity = lastAudioActivity,
+              silenceTimeout > 0 else { return }
+
+        let silenceDuration = Date().timeIntervalSince(lastActivity)
+        if silenceDuration >= silenceTimeout {
+            Logger.info("Silence timeout after \(String(format: "%.1f", silenceDuration))s", category: .audio)
+            stopRecording()
+        }
+    }
+
+    private func stopSilenceDetection() {
+        silenceCheckTimer?.invalidate()
+        silenceCheckTimer = nil
+    }
+
     // MARK: - Recording
 
     public func startRecording() {
-        guard !recordingFailed else { return }
+        // Fail-safe: reset any stuck state from previous errors
+        recordingFailed = false
+        stopSilenceDetection()
+        cleanupAudio()
+
         errorMessage = nil
         e2eStartTime = Date()
         do {
             try recordingController.start()
             recordingStartTime = Date()
             editState = .recording(audioLevel: 0)
+            startSilenceDetection()
             Logger.debug("Recording started", category: .app)
         } catch {
             recordingFailed = true
             errorMessage = error.localizedDescription
+            editState = .idle  // Fail-safe: ensure state resets on error
         }
     }
 
@@ -87,6 +134,8 @@ public class EditViewModel: ObservableObject {
         recordingFailed = false
 
         guard case .recording = editState else { return }
+
+        stopSilenceDetection()
 
         // Immediately switch to processing state so UI shows "Processing" instead of stuck waveform
         if hasText {
@@ -192,9 +241,8 @@ public class EditViewModel: ObservableObject {
             Logger.debug("STT API call [\(params.model)] — \(String(format: "%.2f", Date().timeIntervalSince(apiStart)))s", category: .stt)
             return (text, nil)
         } catch {
-            let detail = "[\(params.model)] \(error.localizedDescription)"
-            Logger.error("\(detail) | endpoint=\(params.endpoint)", category: .stt)
-            return (nil, detail)
+            Logger.error("[\(params.model)] \(error.localizedDescription) | endpoint=\(params.endpoint)", category: .stt)
+            return (nil, error.localizedDescription)
         }
     }
 
@@ -282,6 +330,7 @@ public class EditViewModel: ObservableObject {
         text = ""
         errorMessage = nil
         editState = .idle
+        stopSilenceDetection()
         cleanupAudio()
     }
 

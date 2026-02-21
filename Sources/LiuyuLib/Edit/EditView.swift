@@ -38,10 +38,6 @@ struct EditView: View {
         .modifier(EditViewKeyboardHandler(
             hasText: viewModel.hasText,
             editState: viewModel.editState,
-            onReturn: {
-                onInsert(viewModel.text)
-                onClose()
-            },
             onEscape: {
                 viewModel.clear()
             },
@@ -61,15 +57,24 @@ struct EditView: View {
 
     @ViewBuilder
     private var contentArea: some View {
+        let _ = Logger.debug("contentArea: hasText=\(viewModel.hasText)", category: .ui)
         if viewModel.hasText {
             // Has text: TextEditor fills available space, mic area fixed at bottom
             VStack(spacing: 0) {
-                TextEditor(text: $viewModel.text)
+                // Custom text editor with proper Return key handling
+                MacTextEditor(text: $viewModel.text, onReturn: {
+                    if viewModel.hasText {
+                        onInsert(viewModel.text)
+                        onClose()
+                    }
+                })
                     .font(.system(size: 14))
-                    .scrollContentBackground(.hidden)
                     .padding(.horizontal, 20)
                     .padding(.vertical, 12)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .onAppear {
+                        Logger.debug("MacTextEditor appeared in view hierarchy", category: .ui)
+                    }
 
                 Divider()
 
@@ -125,16 +130,30 @@ struct EditView: View {
         )
 
         if let error = viewModel.errorMessage {
-            Text(error)
-                .font(.caption)
-                .foregroundStyle(.red)
-                .frame(maxWidth: .infinity, alignment: .center)
-                .onAppear {
-                    Task { @MainActor in
-                        try? await Task.sleep(nanoseconds: 5_000_000_000)
-                        viewModel.errorMessage = nil
-                    }
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 12))
+                Text(error)
+                    .font(.system(size: 12, weight: .medium))
+            }
+            .foregroundStyle(.orange)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color.orange.opacity(0.1))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color.orange.opacity(0.3), lineWidth: 1)
+                    )
+            )
+            .frame(maxWidth: .infinity, alignment: .center)
+            .onAppear {
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 5_000_000_000)
+                    viewModel.errorMessage = nil
                 }
+            }
         }
     }
 
@@ -345,13 +364,86 @@ private struct RotatingArc: View {
     }
 }
 
+// MARK: - Mac Text Editor with Return Key Handling
+
+/// A macOS-native text editor that properly handles the Return key
+struct MacTextEditor: NSViewRepresentable {
+    @Binding var text: String
+    var onReturn: () -> Void
+
+    func makeNSView(context: Context) -> NSScrollView {
+        Logger.debug("MacTextEditor makeNSView", category: .ui)
+        let scrollView = NSTextView.scrollableTextView()
+        let textView = scrollView.documentView as! NSTextView
+
+        textView.delegate = context.coordinator
+        textView.isRichText = false
+        textView.allowsUndo = true
+        textView.isSelectable = true
+        textView.isEditable = true
+        textView.backgroundColor = .clear
+
+        // Ensure text view can become first responder
+        textView.autoresizingMask = [.width, .height]
+
+        Logger.debug("MacTextEditor: delegate set to coordinator", category: .ui)
+
+        return scrollView
+    }
+
+    func updateNSView(_ nsView: NSScrollView, context: Context) {
+        let textView = nsView.documentView as! NSTextView
+        Logger.debug("MacTextEditor updateNSView: text='\(text.prefix(20))...', textView.string='\(textView.string.prefix(20))...'", category: .ui)
+        if textView.string != text {
+            textView.string = text
+        }
+        // Update the coordinator's reference to parent to ensure callbacks work
+        context.coordinator.updateParent(self)
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Logger.debug("MacTextEditor makeCoordinator", category: .ui)
+        return Coordinator(self)
+    }
+
+    class Coordinator: NSObject, NSTextViewDelegate {
+        var parent: MacTextEditor
+
+        init(_ parent: MacTextEditor) {
+            self.parent = parent
+        }
+
+        func updateParent(_ parent: MacTextEditor) {
+            self.parent = parent
+        }
+
+        func textDidChange(_ notification: Notification) {
+            guard let textView = notification.object as? NSTextView else { return }
+            parent.text = textView.string
+        }
+
+        func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            Logger.debug("MacTextEditor doCommandBy: \(commandSelector)", category: .ui)
+            // Intercept Return key (Insert Newline command)
+            // Check for various newline selectors that might be sent
+            if commandSelector == #selector(NSResponder.insertNewline(_:)) ||
+               commandSelector == #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)) ||
+               commandSelector == #selector(NSResponder.insertLineBreak(_:)) {
+                Logger.debug("MacTextEditor: Return key intercepted, calling onReturn", category: .ui)
+                parent.onReturn()
+                return true  // Handled
+            }
+            return false  // Let default handling proceed
+        }
+    }
+}
+
 // MARK: - Keyboard Handler
 
 /// A view modifier that handles keyboard shortcuts in the Edit view.
 private struct EditViewKeyboardHandler: ViewModifier {
     let hasText: Bool
     let editState: EditState
-    let onReturn: () -> Void
     let onEscape: () -> Void
     let onCopy: () -> Void
     let onStartRecording: () -> Void
@@ -368,12 +460,12 @@ private struct EditViewKeyboardHandler: ViewModifier {
     func body(content: Content) -> some View {
         content
             .onAppear {
+                // Fail-safe: ensure clean state when view appears
+                isRecordingViaShortcut = false
+
                 keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp]) { event in
-                    // Return key (36) - Insert and close
-                    if event.keyCode == 36 && hasText {
-                        onReturn()
-                        return nil
-                    }
+                    // Note: Return key is handled by TextEditor's .onKeyPress(.return)
+                    // to avoid duplicate events and ensure proper focus handling
 
                     // Escape key (53) - Clear text (with optional double-tap)
                     if event.keyCode == 53 {
@@ -390,18 +482,37 @@ private struct EditViewKeyboardHandler: ViewModifier {
                     }
 
                     // Voice edit shortcut - Hold to record edits, release to stop
-                    if self.matchesVoiceEditShortcut(event) {
-                        if event.type == .keyDown && !isRecordingViaShortcut {
+                    // On keyDown: check full shortcut match
+                    if event.type == .keyDown && self.matchesVoiceEditShortcut(event) {
+                        // Fail-safe: if stuck in non-idle state, reset first
+                        if isRecordingViaShortcut && editState != .idle {
+                            Logger.warning("Fail-safe: resetting stuck recording state", category: .hotkey)
+                            isRecordingViaShortcut = false
+                            onStopRecording()
+                        }
+
+                        if !isRecordingViaShortcut {
                             // Only start if currently idle
                             if case .idle = editState {
                                 isRecordingViaShortcut = true
                                 onStartRecording()
                             }
-                        } else if event.type == .keyUp && isRecordingViaShortcut {
-                            isRecordingViaShortcut = false
-                            onStopRecording()
                         }
                         return nil
+                    }
+
+                    // On keyUp: check if we're recording and keyCode matches
+                    // Must check this AFTER the shortcut match above, and only if we're recording
+                    if event.type == .keyUp && isRecordingViaShortcut {
+                        let shortcut = voiceEditShortcut
+                        // For modifier-only shortcuts (keyCode=0), any keyUp stops recording
+                        // For key shortcuts, only matching keyCode stops recording
+                        let shouldStop = shortcut.keyCode == 0 || event.keyCode == shortcut.keyCode
+                        if shouldStop {
+                            isRecordingViaShortcut = false
+                            onStopRecording()
+                            return nil
+                        }
                     }
 
                     return event
@@ -474,4 +585,5 @@ private struct EditViewKeyboardHandler: ViewModifier {
 
         return modifiersMatch && fnMatch
     }
+
 }
