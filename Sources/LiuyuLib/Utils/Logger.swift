@@ -17,10 +17,12 @@ public struct Logger {
     
     /// Debug mode flag controlled by environment variable "LIUYU_DEBUG"
     /// Also defaults to true if the DEBUG compiler flag is set (Xcode Debug build)
+    /// Can also be forced via UserDefaults: defaults write com.liuyu.app debugMode -bool true
     public static let isDebugEnabled: Bool = {
         #if DEBUG
         return true
         #else
+        if UserDefaults.standard.bool(forKey: "debugMode") { return true }
         let env = ProcessInfo.processInfo.environment["LIUYU_DEBUG"]?.lowercased()
         return env == "1" || env == "true" || env == "yes"
         #endif

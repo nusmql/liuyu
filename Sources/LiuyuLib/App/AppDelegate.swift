@@ -14,20 +14,13 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var cancellables = Set<AnyCancellable>()
     nonisolated(unsafe) private var previousApp: NSRunningApplication?
-    private var recordingStartTime: Date?
     private var currentAudioFileURL: URL?
     private var accessibilityPollTimer: Timer?
-    private var isRecording = false
-    private var recordingFailsafeTimer: Timer?
 
     private let providerStore = ProviderConfigStore()
-    private let minimumRecordingDuration: TimeInterval = 0.3
-    /// Silence timeout: auto-stop when no audio activity for this duration (seconds)
-    private var silenceTimeout: TimeInterval {
-        let saved = UserDefaults.standard.integer(forKey: "silenceTimeout")
-        // Default 5 seconds, 0 means disabled
-        return saved > 0 ? TimeInterval(saved) : 5.0
-    }
+
+    /// Recording state manager
+    private let recordingState = RecordingState.shared
 
     public override init() { super.init() }
 
@@ -218,21 +211,69 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func setupHotkeySubscription() {
         Logger.debug("Setting up hotkey subscription", category: .app)
+
+        // Forward hotkey events to RecordingState
         hotkeyManager.events
             .receive(on: DispatchQueue.main)
             .sink { [weak self] event in
                 guard let self else { return }
                 Logger.debug("Hotkey event received: \(event), shortcut: \(self.hotkeyManager.shortcut.displayString)", category: .hotkey)
-                // ALL shortcuts use hold-to-record behavior
                 switch event {
                 case .keyDown:
-                    self.handleKeyDown()
+                    self.recordingState.keyDown()
                 case .keyUp:
-                    self.handleKeyUp()
+                    self.recordingState.keyUp()
                 }
             }
             .store(in: &cancellables)
+
+        // Subscribe to RecordingState phase changes
+        recordingState.$phase
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] phase in
+                self?.handleRecordingPhaseChange(phase)
+            }
+            .store(in: &cancellables)
+
+        // Update hotkeyManager when RecordingState changes
+        recordingState.$phase
+            .map { $0.isActive }
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] isActive in
+                self?.hotkeyManager.isRecording = isActive
+            }
+            .store(in: &cancellables)
     }
+
+    private func handleRecordingPhaseChange(_ phase: RecordingState.RecordingPhase) {
+        Logger.debug("Recording phase changed to: \(phase)", category: .app)
+
+        switch phase {
+        case .debouncing:
+            // Just waiting, no UI yet
+            break
+
+        case .recording:
+            startRecordingUI()
+
+        case .processing:
+            stopRecordingUI()
+
+        case .completed(let text):
+            showTranscriptionResult(text)
+
+        case .error(let message):
+            showError(message)
+            recordingState.cancel()
+
+        case .idle:
+            // Cleanup if needed
+            break
+        }
+    }
+
+    private var wasHotkeyActiveBeforeRecording = false
 
     private func setupHotkeyRefresh() {
         NotificationCenter.default
@@ -240,33 +281,38 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] notification in
                 if let shortcut = notification.object as? RecordedShortcut {
+                    Logger.debug("Shortcut changed to: \(shortcut.displayString)", category: .hotkey)
                     self?.hotkeyManager.shortcut = shortcut
                 } else {
-                    // nil means disable hotkey (during recording)
+                    Logger.debug("Shortcut changed to nil (stopping)", category: .hotkey)
                     self?.hotkeyManager.stop()
                 }
             }
             .store(in: &cancellables)
 
+        // Pause hotkey during shortcut recording to avoid conflicts
         NotificationCenter.default
             .publisher(for: .hotkeyRecordingDidBegin)
+            .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
-                // For Carbon-based hotkeys, we need to stop during recording to prevent re-triggering
-                // For EventTap-based hotkeys (modifier-only or Fn+key), we must keep it running
-                // to capture the keyUp event that stops recording
-                guard let self else { return }
-                if !self.hotkeyManager.isUsingEventTap {
-                    self.hotkeyManager.stop()
-                }
+                guard let self = self else { return }
+                Logger.debug("Pausing hotkey for recording", category: .hotkey)
+                // Remember if hotkey was active (has valid shortcut)
+                self.wasHotkeyActiveBeforeRecording = self.hotkeyManager.shortcut.isValid
+                // Stop the hotkey manager temporarily
+                self.hotkeyManager.stop()
             }
             .store(in: &cancellables)
 
+        // Resume hotkey after shortcut recording ends
         NotificationCenter.default
             .publisher(for: .hotkeyRecordingDidEnd)
+            .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
-                guard let self else { return }
-                // Only restart if we stopped it (Carbon-based shortcuts)
-                if !self.hotkeyManager.isUsingEventTap {
+                guard let self = self else { return }
+                Logger.debug("Resuming hotkey after recording", category: .hotkey)
+                // Only restart if hotkey was active before and we have accessibility permission
+                if self.wasHotkeyActiveBeforeRecording && HotkeyManager.isAccessibilityGranted {
                     try? self.hotkeyManager.start()
                 }
             }
@@ -276,23 +322,18 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         NotificationCenter.default
             .publisher(for: NSApplication.didResignActiveNotification)
             .sink { [weak self] _ in
-                guard let self, self.isRecording else { return }
+                guard let self, self.recordingState.phase.isRecording else { return }
                 Logger.info("App lost focus during recording - auto-stopping", category: .app)
-                self.handleKeyUp()
+                self.recordingState.keyUp()
             }
             .store(in: &cancellables)
     }
 
-    // MARK: - Recording Flow
+    // MARK: - Recording Flow (using RecordingState)
 
-    private func handleKeyDown() {
-        Logger.debug("handleKeyDown called, isRecording: \(isRecording)", category: .app)
-        // Prevent duplicate triggers
-        guard !isRecording else {
-            Logger.debug("Already recording, ignoring", category: .app)
-            return
-        }
-
+    /// Called when RecordingState enters .recording phase
+    private func startRecordingUI() {
+        Logger.debug("Starting recording UI", category: .app)
         previousApp = NSWorkspace.shared.frontmostApplication
 
         panelController.viewModel.showRecording()
@@ -301,97 +342,30 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
         do {
             try recordingController.start()
-            recordingStartTime = Date()
-            isRecording = true
-            // Set flag in hotkeyManager for EventTap-based shortcuts
-            hotkeyManager.isRecording = true
-            // Setup silence detection timer
-            let timeout = silenceTimeout
-            if timeout > 0 {
-                recordingFailsafeTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-                    Task { @MainActor in
-                        guard let self = self else {
-                            return
-                        }
-                        guard self.isRecording else {
-                            self.recordingFailsafeTimer?.invalidate()
-                            self.recordingFailsafeTimer = nil
-                            return
-                        }
-                        // Check if no audio activity for the configured timeout period
-                        if !self.recordingController.hasRecentAudioActivity {
-                            // Get time since last activity
-                            if let lastActivity = self.recordingController.lastAudioActivityTime {
-                                let silenceDuration = Date().timeIntervalSince(lastActivity)
-                                // print("[AppDelegate] Silence check: \(String(format: "%.1f", silenceDuration))s / \(timeout)s") // Debug logging
-                                if silenceDuration >= timeout {
-                                    Logger.info("Silence timeout: no audio for \(Int(silenceDuration))s, auto-stopping", category: .audio)
-                                    self.handleKeyUp()
-                                }
-                            }
-                        } else {
-                            // print("[AppDelegate] Recent audio activity detected, resetting silence timer") // Debug logging
-                        }
-                    }
+
+            // Forward audio levels to RecordingState
+            recordingController.$audioLevel
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] level in
+                    self?.recordingState.updateAudioActivity(level: level)
+                    self?.panelController.viewModel.updateAudioLevel(level)
                 }
-            }
+                .store(in: &cancellables)
         } catch {
+            Logger.error("Failed to start recording: \(error)", category: .audio)
             panelController.hide()
-            isRecording = false
-            hotkeyManager.isRecording = false
-            // Restart hotkey on error
-            try? hotkeyManager.start()
-            return
+            recordingState.cancel()
         }
-
-        recordingController.$audioLevel
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] level in
-                self?.panelController.viewModel.updateAudioLevel(level)
-            }
-            .store(in: &cancellables)
     }
 
-    private func handleKeyUp() {
-        Logger.debug("handleKeyUp called", category: .app)
-        let elapsed = Date().timeIntervalSince(recordingStartTime ?? Date())
-        Logger.debug("Recording elapsed: \(elapsed)s", category: .audio)
-
-        // Always reset state and invalidate failsafe timer
-        recordingFailsafeTimer?.invalidate()
-        recordingFailsafeTimer = nil
-
-        if elapsed < minimumRecordingDuration {
-            Logger.info("Recording too short, canceling", category: .audio)
-            panelController.hide()
-            isRecording = false
-            hotkeyManager.isRecording = false
-            cleanupCurrentAudio()
-            // Restart hotkey after short recording
-            try? hotkeyManager.start()
-            return
-        }
-        stopRecordingAndTranscribe()
-    }
-
-    private func stopRecordingAndTranscribe() {
-        Logger.debug("stopRecordingAndTranscribe called, isRecording: \(isRecording)", category: .app)
-        guard isRecording else {
-            Logger.debug("Not recording, returning", category: .app)
-            return
-        }
-        isRecording = false
-        hotkeyManager.isRecording = false
-
-        // Invalidate the failsafe timer
-        recordingFailsafeTimer?.invalidate()
-        recordingFailsafeTimer = nil
+    /// Called when RecordingState enters .processing phase
+    private func stopRecordingUI() {
+        Logger.debug("Stopping recording UI", category: .app)
 
         guard let audioURL = recordingController.stop() else {
-            Logger.warning("No audio recorded, hiding panel", category: .audio)
+            Logger.warning("No audio recorded", category: .audio)
             panelController.hide()
-            // Restart hotkey on error
-            try? hotkeyManager.start()
+            recordingState.cancel()
             return
         }
 
@@ -400,32 +374,45 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         panelController.viewModel.showProcessing()
 
         Task {
-            let text = await transcribeForEditWindow(audioURL: audioURL)
-            Logger.info("Transcription complete: \(text.prefix(50))...", category: .stt)
-            await MainActor.run {
-                // Hide panel immediately
-                Logger.debug("Hiding panel", category: .ui)
-                panelController.hide(immediately: true)
-                // Restart hotkey after transcription
-                try? self.hotkeyManager.start()
+            // Small delay to ensure processing UI is rendered
+            try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
 
-                // Check if Edit window is already open with text - if so, treat as modification instruction
-                if self.editController.isWindowVisible && self.editController.hasText {
-                    Logger.info("Edit window visible with text, applying instruction", category: .ui)
-                    self.editController.applyInstruction(text)
-                    self.cleanupCurrentAudio()
-                } else {
-                    // Open Edit window on next runloop to avoid layout conflicts
-                    Logger.debug("Scheduling Edit window open", category: .ui)
-                    DispatchQueue.main.async {
-                        Logger.info("Opening Edit window", category: .ui)
-                        self.editController.showWithText(text) { [weak self] _ in
-                            self?.cleanupCurrentAudio()
-                        }
-                    }
+            let text = await transcribeForEditWindow(audioURL: audioURL)
+
+            await MainActor.run {
+                recordingState.transition(to: .completed(text))
+            }
+        }
+    }
+
+    /// Called when RecordingState enters .completed phase
+    private func showTranscriptionResult(_ text: String) {
+        Logger.info("Showing transcription result", category: .stt)
+
+        // Hide panel immediately
+        panelController.hide(immediately: true)
+
+        // Check if Edit window is already open with text
+        if editController.isWindowVisible && editController.hasText {
+            Logger.info("Edit window visible with text, applying instruction", category: .ui)
+            editController.applyInstruction(text)
+            cleanupCurrentAudio()
+        } else {
+            // Open Edit window on next runloop
+            DispatchQueue.main.async { [weak self] in
+                Logger.info("Opening Edit window", category: .ui)
+                self?.editController.showWithText(text) { [weak self] _ in
+                    self?.cleanupCurrentAudio()
                 }
             }
         }
+    }
+
+    /// Called when RecordingState enters .error phase
+    private func showError(_ message: String) {
+        Logger.error("Recording error: \(message)", category: .app)
+        panelController.hide()
+        // Could show an alert here
     }
 
     private func tryTranscribe(assignment: ModelAssignment, audioURL: URL) async -> (String?, String?) {
@@ -465,7 +452,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func handlePanelAction(_ action: PanelAction) {
         cleanupCurrentAudio()
-        isRecording = false
+        recordingState.cancel()
     }
 
     private func transcribeForEditWindow(audioURL: URL) async -> String {

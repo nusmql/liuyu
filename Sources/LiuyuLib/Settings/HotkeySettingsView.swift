@@ -10,6 +10,7 @@ struct HotkeySettingsView: View {
     @State private var editRecordConflictWarning: String? = nil
     @State private var clearRequiresDoubleTap: Bool = UserDefaults.standard.bool(forKey: "editClearDoubleTap")
     @State private var silenceTimeout: SilenceTimeoutOption = SilenceTimeoutOption.loadFromDefaults()
+    @State private var useClickMode: Bool = UserDefaults.standard.bool(forKey: "hotkeyUseClickMode")
 
     var body: some View {
         Form {
@@ -34,8 +35,9 @@ struct HotkeySettingsView: View {
                             ShortcutRecorderView(shortcut: $shortcut, onBeginRecording: {
                                 self.shortcut = nil
                                 UserDefaults.standard.removeObject(forKey: "recordedShortcut")
-                                NotificationCenter.default.post(name: .hotkeyShortcutChanged, object: nil)
-                                NotificationCenter.default.post(name: .hotkeyRecordingDidBegin, object: nil)
+                                // Do NOT manually post .hotkeyShortcutChanged or .hotkeyRecordingDidBegin here.
+                                // ShortcutRecorder already posts .hotkeyRecordingDidBegin.
+                                // And setting self.shortcut = nil triggers .onChange which posts .hotkeyShortcutChanged.
                             })
                                 .frame(width: 140, height: 28)
                                 .onChange(of: shortcut) { newValue in

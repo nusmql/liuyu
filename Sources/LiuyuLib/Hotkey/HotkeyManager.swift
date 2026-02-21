@@ -27,6 +27,7 @@ public class HotkeyManager {
 
     public var shortcut: RecordedShortcut = .default {
         didSet {
+            Logger.debug("Shortcut didSet: \(shortcut.displayString)", category: .hotkey)
             // Restart hotkey registration with new shortcut immediately
             stop()
             // Only start if shortcut is valid
@@ -93,7 +94,15 @@ public class HotkeyManager {
         eventHandlerInstalled = false
 
         isKeyDown = false
+        isRecording = false
         Logger.debug("stop() complete", category: .hotkey)
+    }
+
+    /// Reset key state without stopping the hotkey manager.
+    /// Called when recording is stopped by silence timeout to prevent duplicate keyUp events.
+    public func resetKeyState() {
+        Logger.debug("Resetting key state", category: .hotkey)
+        isKeyDown = false
     }
 
     // MARK: - Global HotKey (for key combinations)
@@ -205,8 +214,8 @@ public class HotkeyManager {
     }
 
     private func handleFlagsChangedEvent(_ event: CGEvent) -> Unmanaged<CGEvent>? {
-        // Only handle modifier-only shortcuts here
-        guard shortcut.isModifierOnly && !shortcut.includesFnKey else {
+        // Only handle modifier-only shortcuts here (including Fn-only)
+        guard shortcut.isModifierOnly else {
             return Unmanaged.passUnretained(event)
         }
 
@@ -214,15 +223,22 @@ public class HotkeyManager {
         let targetFlags = shortcut.flags
         let modifierMatch = flags.intersection(targetFlags) == targetFlags
 
-        Logger.debug("FlagsChanged - flags: \(flags.rawValue), target: \(targetFlags.rawValue), match: \(modifierMatch), isKeyDown: \(isKeyDown)", category: .hotkey)
+        // Check Fn key if needed
+        let fnKeyPressed = flags.contains(.maskSecondaryFn)
+        let fnMatch = shortcut.includesFnKey == fnKeyPressed
 
-        if modifierMatch && !isKeyDown {
-            Logger.debug("Modifier-only KEY DOWN", category: .hotkey)
+        let allMatch = modifierMatch && fnMatch
+
+        if allMatch && !isKeyDown {
+            // Prevent keyDown during recording, but allow keyUp
+            guard !isRecording else {
+                return Unmanaged.passUnretained(event)
+            }
             isKeyDown = true
             events.send(.keyDown)
             return nil
-        } else if !modifierMatch && isKeyDown {
-            Logger.debug("Modifier-only KEY UP", category: .hotkey)
+        } else if !allMatch && isKeyDown {
+            // Always allow keyUp, even during recording
             isKeyDown = false
             events.send(.keyUp)
             return nil
@@ -232,6 +248,16 @@ public class HotkeyManager {
     }
 
     private func handleKeyEvent(_ event: CGEvent) -> Unmanaged<CGEvent>? {
+        // Don't process events during recording
+        guard !isRecording else {
+            return Unmanaged.passUnretained(event)
+        }
+
+        // Don't process modifier-only shortcuts here - they are handled by handleFlagsChangedEvent
+        guard !shortcut.isModifierOnly else {
+            return Unmanaged.passUnretained(event)
+        }
+
         let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
         let flags = event.flags
 
@@ -242,24 +268,16 @@ public class HotkeyManager {
         // Check modifiers match
         let modifierMatch = flags.intersection(targetFlags) == targetFlags
 
-        // Check Fn key if needed
+        // Check Fn key if needed (only the actual Fn modifier flag, not F13)
         let fnKeyPressed = flags.contains(.maskSecondaryFn)
         let fnMatch = shortcut.includesFnKey == fnKeyPressed
 
         let keyMatch = keyCode == targetKeyCode
 
-        // Debug logging
-        Logger.debug("\(event.type == .keyDown ? "keyDown" : "keyUp") - keyCode: \(keyCode), target: \(targetKeyCode), modMatch: \(modifierMatch), fnMatch: \(fnMatch), isKeyDown: \(isKeyDown)", category: .hotkey)
-
         if event.type == .keyDown {
             if modifierMatch && keyMatch && fnMatch {
                 // Don't re-trigger if already recording (for EventTap-based shortcuts)
-                if isRecording {
-                    Logger.debug("KeyDown ignored - already recording", category: .hotkey)
-                    return nil
-                }
                 if !isKeyDown {
-                    Logger.debug("Key combination DOWN -> sending event", category: .hotkey)
                     isKeyDown = true
                     events.send(.keyDown)
                 }
@@ -269,7 +287,6 @@ public class HotkeyManager {
             // On keyUp, only check if the key matches and we were in keyDown state
             // Don't check modifiers - user may have released them before the key
             if keyMatch && isKeyDown {
-                Logger.debug("Key combination UP -> sending event", category: .hotkey)
                 isKeyDown = false
                 events.send(.keyUp)
                 return nil

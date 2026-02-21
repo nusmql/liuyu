@@ -125,18 +125,4 @@ final class ModelConfigTests: XCTestCase {
         XCTAssertEqual(def.sttApiFormat, .chatCompletionsAudio)
     }
 
-    // MARK: - HotkeyPreset
-
-    func testHotkeyPresetFromRawValue() {
-        XCTAssertEqual(HotkeyPreset.from(rawValue: "Right Option"), .rightOption)
-        XCTAssertEqual(HotkeyPreset.from(rawValue: "Right Command"), .rightCommand)
-        XCTAssertEqual(HotkeyPreset.from(rawValue: "Option Key"), .optionKey)
-        XCTAssertEqual(HotkeyPreset.from(rawValue: "invalid"), .rightOption) // fallback
-    }
-
-    func testHotkeyPresetKeycodes() {
-        XCTAssertNil(HotkeyPreset.optionKey.specificKeycode)
-        XCTAssertEqual(HotkeyPreset.rightOption.specificKeycode, 0x3D)
-        XCTAssertEqual(HotkeyPreset.rightCommand.specificKeycode, 0x36)
-    }
 }

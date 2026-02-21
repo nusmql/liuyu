@@ -1,5 +1,5 @@
 // Sources/LiuyuLib/Settings/ShortcutRecorder.swift
-import Cocoa
+@preconcurrency import Cocoa
 import CoreGraphics
 import SwiftUI
 
@@ -26,8 +26,12 @@ public class ShortcutRecorder: NSView {
     // The monitor is created on main thread but deinit can happen anywhere
     nonisolated(unsafe) private var localMonitor: Any?
     private var currentFlags: CGEventFlags = []
-    private var currentKeyCode: UInt16 = 0
+    private var accumulatedFlags: CGEventFlags = []  // Track all modifiers pressed during recording
+    private var currentKeyCode: UInt16 = UInt16.max
     private var currentIncludesFnKey: Bool = false
+    private var isFnPressed: Bool = false
+    private var eventTap: CFMachPort?
+    private var runLoopSource: CFRunLoopSource?
 
     private let label: NSTextField
     private let clearButton: NSButton
@@ -144,16 +148,8 @@ public class ShortcutRecorder: NSView {
 
     private func updateLabel() {
         if isRecording {
-            if currentFlags.isEmpty && currentKeyCode == 0 && !currentIncludesFnKey {
-                label.stringValue = "Press shortcut..."
-                label.textColor = .controlAccentColor
-            } else {
-                let flagsStr = flagsDisplayString(currentFlags)
-                let keyStr = KeyCodeMap.string(for: currentKeyCode) ?? ""
-                let fnPrefix = currentIncludesFnKey ? "Fn " : ""
-                label.stringValue = fnPrefix + flagsStr + keyStr
-                label.textColor = .labelColor
-            }
+            label.stringValue = "Press shortcut..."
+            label.textColor = .controlAccentColor
         } else {
             if let shortcut = currentShortcut, shortcut.isValid {
                 label.stringValue = shortcut.displayString
@@ -199,109 +195,148 @@ public class ShortcutRecorder: NSView {
     // MARK: - Recording
 
     private func startRecording() {
+        Logger.debug("Start recording", category: .settings)
         isRecording = true
         currentFlags = []
+        accumulatedFlags = []  // Reset accumulated flags
+        currentKeyCode = UInt16.max
+        isFnPressed = false
         updateLabel()
         updateAppearance()
 
         NotificationCenter.default.post(name: .hotkeyRecordingDidBegin, object: self)
         delegate?.shortcutRecorderDidBeginRecording(self)
 
-        // Install local event monitor for key events
-        localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.flagsChanged, .keyDown, .keyUp]) { [weak self] event in
-            guard let self = self else { return event }
-
-            switch event.type {
-            case .flagsChanged:
-                self.handleFlagsChanged(event)
-                return nil // Consume the event
-
-            case .keyDown:
-                if event.keyCode == 53 { // Escape key
-                    self.cancelRecording()
-                } else if event.keyCode == 36 { // Return key
-                    self.finishRecording()
-                } else {
-                    // Capture the key code along with modifiers
-                    // Also check if Fn is being held
-                    if event.modifierFlags.contains(.function) {
-                        self.currentIncludesFnKey = true
-                    }
-                    self.currentKeyCode = event.keyCode
-                    self.updateLabel()
-                    self.finishRecording()
-                }
-                return nil // Consume the event
-
-            default:
-                return event
-            }
+        // Use CGEventTap to reliably capture Fn and modifier states
+        let mask: CGEventMask = (1 << CGEventType.flagsChanged.rawValue)
+            | (1 << CGEventType.keyDown.rawValue)
+            | (1 << CGEventType.keyUp.rawValue)
+        if let tap = CGEvent.tapCreate(
+            tap: .cgSessionEventTap,
+            place: .headInsertEventTap,
+            options: .defaultTap,
+            eventsOfInterest: mask,
+            callback: { _, _, event, refcon -> Unmanaged<CGEvent>? in
+                guard let refcon else { return Unmanaged.passUnretained(event) }
+                let recorder = Unmanaged<ShortcutRecorder>.fromOpaque(refcon).takeUnretainedValue()
+                return recorder.handleEventTap(event)
+            },
+            userInfo: Unmanaged.passUnretained(self).toOpaque()
+        ) {
+            eventTap = tap
+            let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+            runLoopSource = source
+            CFRunLoopAddSource(CFRunLoopGetCurrent(), source, .commonModes)
+            CGEvent.tapEnable(tap: tap, enable: true)
         }
 
-        // Also install a global monitor to catch events outside our window
-        // This helps ensure we don't miss the key release
-        NSEvent.addGlobalMonitorForEvents(matching: [.flagsChanged, .keyDown]) { [weak self] event in
-            guard let self = self else { return }
+        // Local monitor for Escape/Return to control recording lifecycle
+        localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
+            guard let self = self else { return event }
+            if event.keyCode == 53 { self.cancelRecording(); return nil }
+            if event.keyCode == 36 { self.finishRecording(); return nil }
+            return event
+        }
+    }
 
-            if event.type == .flagsChanged {
-                DispatchQueue.main.async {
-                    self.handleFlagsChanged(event)
-                }
-            } else if event.type == .keyDown {
-                DispatchQueue.main.async {
-                    if event.keyCode == 53 { // Escape
-                        self.cancelRecording()
-                    } else {
-                        // Check if Fn is being held during key press
-                        if event.modifierFlags.contains(.function) {
-                            self.currentIncludesFnKey = true
+    private func handleEventTap(_ event: CGEvent) -> Unmanaged<CGEvent>? {
+        switch event.type {
+        case .flagsChanged:
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                let flags = event.flags
+                let fnDown = flags.contains(.maskSecondaryFn)
+                let hadFn = self.isFnPressed
+                self.isFnPressed = fnDown
+                if fnDown { self.currentIncludesFnKey = true }
+                var cgFlags: CGEventFlags = []
+                if flags.contains(.maskControl) { cgFlags.insert(.maskControl) }
+                if flags.contains(.maskAlternate) { cgFlags.insert(.maskAlternate) }
+                if flags.contains(.maskShift) { cgFlags.insert(.maskShift) }
+                if flags.contains(.maskCommand) { cgFlags.insert(.maskCommand) }
+
+                // Accumulate all modifiers that were pressed during recording
+                self.accumulatedFlags.formUnion(cgFlags)
+
+                let wereFlags = !self.currentFlags.isEmpty
+                self.currentFlags = cgFlags
+
+                // Check if Fn was released (and no other keys were pressed)
+                let fnReleased = hadFn && !fnDown && self.currentKeyCode == UInt16.max
+
+                // Finish recording if:
+                // 1. Modifiers were released and no key was pressed, OR
+                // 2. Fn was released (treat as "Fn-only" shortcut)
+                if (wereFlags && cgFlags.isEmpty && self.currentKeyCode == UInt16.max) || fnReleased {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                        guard let self = self, self.isRecording else { return }
+                        // If user released all keys (including Fn) and hasn't pressed a regular key yet
+                        if self.currentFlags.isEmpty && !self.isFnPressed && self.currentKeyCode == UInt16.max {
+                            self.finishRecording()
                         }
-                        self.currentKeyCode = event.keyCode
-                        self.updateLabel()
-                        self.finishRecording()
                     }
                 }
             }
+            return Unmanaged.passUnretained(event)
+        case .keyDown:
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                let code = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
+                // F13 (105) is treated as a regular function key (mapped from Fn via Karabiner)
+                // We don't set includesFnKey for it - it's just a regular keyCode
+                if event.flags.contains(.maskSecondaryFn) { self.currentIncludesFnKey = true }
+                self.currentKeyCode = code
+                self.finishRecording()
+            }
+            return Unmanaged.passUnretained(event)
+        case .keyUp:
+            // keyUp handling - no special treatment needed for F13
+            return Unmanaged.passUnretained(event)
+        default:
+            return Unmanaged.passUnretained(event)
         }
     }
 
     private func handleFlagsChanged(_ event: NSEvent) {
         let flags = event.modifierFlags
 
-        // Check for Fn key
+        // Get device-independent flags first to check for changes
+        let deviceFlags = flags.intersection(.deviceIndependentFlagsMask)
+        var cgFlags: CGEventFlags = []
+        if deviceFlags.contains(.control) { cgFlags.insert(.maskControl) }
+        if deviceFlags.contains(.option) { cgFlags.insert(.maskAlternate) }
+        if deviceFlags.contains(.shift) { cgFlags.insert(.maskShift) }
+        if deviceFlags.contains(.command) { cgFlags.insert(.maskCommand) }
+
+        // Accumulate all modifiers that were pressed during recording
+        accumulatedFlags.formUnion(cgFlags)
+
+        // Check Fn state change
+        let fnWasPressed = isFnPressed
         if flags.contains(.function) {
             currentIncludesFnKey = true
+            isFnPressed = true
+        } else {
+            isFnPressed = false
         }
 
-        // Get device-independent flags
-        let deviceFlags = flags.intersection(.deviceIndependentFlagsMask)
-
-        // Convert NSEvent modifier flags to CGEventFlags
-        var cgFlags: CGEventFlags = []
-        if deviceFlags.contains(.control) {
-            cgFlags.insert(.maskControl)
-        }
-        if deviceFlags.contains(.option) {
-            cgFlags.insert(.maskAlternate)
-        }
-        if deviceFlags.contains(.shift) {
-            cgFlags.insert(.maskShift)
-        }
-        if deviceFlags.contains(.command) {
-            cgFlags.insert(.maskCommand)
-        }
+        // Detect release
+        // 1. Modifiers released: previous had flags, now empty
+        let flagsReleased = !currentFlags.isEmpty && cgFlags.isEmpty
+        // 2. Fn released: previous had Fn, now no Fn (and no other flags)
+        let fnReleased = fnWasPressed && !isFnPressed && cgFlags.isEmpty
 
         currentFlags = cgFlags
         updateLabel()
 
-        // If all modifiers are released and we had some before, finish recording
-        if cgFlags.isEmpty && !currentFlags.isEmpty {
-            // Small delay to allow for key combinations
+        if flagsReleased || fnReleased {
+             // Small delay to allow for key combinations
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
                 guard let self = self, self.isRecording else { return }
-                if self.currentFlags.isEmpty {
-                    // If still empty after delay, user released all keys
-                    // Don't auto-finish - wait for Return or another key
+
+                // If user released all keys (including Fn) and hasn't pressed a regular key yet
+                if self.currentFlags.isEmpty && !self.isFnPressed && self.currentKeyCode == UInt16.max {
+                     self.finishRecording()
                 }
             }
         }
@@ -311,20 +346,23 @@ public class ShortcutRecorder: NSView {
         guard isRecording else { return }
 
         let shortcut: RecordedShortcut?
-        if currentFlags.isEmpty && currentKeyCode == 0 && !currentIncludesFnKey {
+        // Use accumulatedFlags to capture all modifiers that were pressed during recording
+        let effectiveFlags = accumulatedFlags.isEmpty ? currentFlags : accumulatedFlags
+        if effectiveFlags.isEmpty && currentKeyCode == UInt16.max && !currentIncludesFnKey {
             shortcut = nil
         } else {
-            shortcut = RecordedShortcut(flags: currentFlags, keyCode: currentKeyCode, includesFnKey: currentIncludesFnKey)
+            let kc: UInt16? = (currentKeyCode == UInt16.max) ? nil : currentKeyCode
+            shortcut = RecordedShortcut(flags: effectiveFlags, keyCode: kc, includesFnKey: currentIncludesFnKey)
         }
 
         cleanupRecording()
 
-        if let shortcut = shortcut {
-            setShortcut(shortcut)
-        }
+        // Important: Update local state FIRST to avoid race condition with binding
+        setShortcut(shortcut)
 
-        // Call delegate first to update the shortcut, THEN post notification
+        // Notify delegate (updates binding)
         delegate?.shortcutRecorder(self, didRecord: shortcut)
+        // Notify system (triggers HotkeyManager start)
         NotificationCenter.default.post(name: .hotkeyRecordingDidEnd, object: self)
     }
 
@@ -343,13 +381,25 @@ public class ShortcutRecorder: NSView {
     private func cleanupRecording() {
         isRecording = false
         currentFlags = []
-        currentKeyCode = 0
+        accumulatedFlags = []  // Reset accumulated flags
+        currentKeyCode = UInt16.max
         currentIncludesFnKey = false
+        isFnPressed = false
 
         if let monitor = localMonitor {
             NSEvent.removeMonitor(monitor)
             localMonitor = nil
         }
+        if let tap = eventTap {
+            CGEvent.tapEnable(tap: tap, enable: false)
+            eventTap = nil
+        }
+        if let source = runLoopSource {
+            CFRunLoopRemoveSource(CFRunLoopGetCurrent(), source, .commonModes)
+            runLoopSource = nil
+        }
+        
+        updateAppearance()
     }
 
     // MARK: - Cleanup
@@ -360,6 +410,15 @@ public class ShortcutRecorder: NSView {
         // Capture monitor locally to avoid accessing actor-isolated property in deinit
         if let monitor = localMonitor {
             NSEvent.removeMonitor(monitor)
+        }
+
+        // Disable EventTap if active - MUST happen to prevent callback to dangling pointer
+        // EventTap is not actor-isolated, safe to access from deinit
+        if let tap = eventTap {
+            CGEvent.tapEnable(tap: tap, enable: false)
+        }
+        if let source = runLoopSource {
+            CFRunLoopRemoveSource(CFRunLoopGetCurrent(), source, .commonModes)
         }
     }
 }

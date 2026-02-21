@@ -6,21 +6,63 @@ import AppKit
 /// A recorded shortcut that stores modifier flags, keycode, and fn key state for hotkey activation.
 public struct RecordedShortcut: Codable, Equatable, Sendable {
     /// The raw flag value for CGEventFlags.
-    public let modifierFlags: CGEventFlags.RawValue
-    /// The keycode for the non-modifier key (0 if only modifiers).
-    public let keyCode: UInt16
+    public var modifierFlags: CGEventFlags.RawValue
+    
+    // Internal storage for key code. 0 means "No Key", 0xFFFF means "A" (0).
+    // Internal access to ensure Codable visibility within module if needed, though private should work.
+    var storageKeyCode: UInt16
+    
+    /// The keycode for the non-modifier key (0 if only modifiers or key A).
+    public var keyCode: UInt16 {
+        storageKeyCode == 0xFFFF ? 0 : storageKeyCode
+    }
+    
     /// Whether the Fn key is part of the shortcut.
-    public let includesFnKey: Bool
+    public var includesFnKey: Bool
+
+    private enum CodingKeys: String, CodingKey {
+        case modifierFlags
+        case storageKeyCode = "keyCode"
+        case includesFnKey
+    }
 
     /// Creates a new RecordedShortcut from CGEventFlags, keycode, and fn key state.
     /// - Parameters:
     ///   - flags: The CGEventFlags to store.
-    ///   - keyCode: The keycode for the non-modifier key (default 0 for modifier-only).
+    ///   - keyCode: The keycode for the non-modifier key (pass nil for modifier-only).
     ///   - includesFnKey: Whether the Fn key is part of the shortcut.
-    public init(flags: CGEventFlags, keyCode: UInt16 = 0, includesFnKey: Bool = false) {
+    public init(flags: CGEventFlags, keyCode: UInt16? = nil, includesFnKey: Bool = false) {
         self.modifierFlags = flags.rawValue
-        self.keyCode = keyCode
         self.includesFnKey = includesFnKey
+        if let kc = keyCode {
+            // If user passes 0, they mean Key A. Store as 0xFFFF.
+            self.storageKeyCode = (kc == 0) ? 0xFFFF : kc
+        } else {
+            // No key provided implies modifier only.
+            self.storageKeyCode = 0
+        }
+    }
+    
+    // MARK: - Codable Implementation
+    
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.modifierFlags = try container.decode(CGEventFlags.RawValue.self, forKey: .modifierFlags)
+        self.includesFnKey = try container.decode(Bool.self, forKey: .includesFnKey)
+        
+        // Handle potential missing key or legacy format
+        if let code = try? container.decode(UInt16.self, forKey: .storageKeyCode) {
+            self.storageKeyCode = code
+        } else {
+            self.storageKeyCode = 0
+        }
+    }
+    
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(modifierFlags, forKey: .modifierFlags)
+        try container.encode(includesFnKey, forKey: .includesFnKey)
+        try container.encode(storageKeyCode, forKey: .storageKeyCode)
     }
 
     /// Returns the CGEventFlags computed from the stored raw value.
@@ -28,19 +70,22 @@ public struct RecordedShortcut: Codable, Equatable, Sendable {
         CGEventFlags(rawValue: modifierFlags)
     }
 
-    /// Returns true if the shortcut has any modifier flags set or a keycode.
+    /// Returns true if the shortcut has any modifier flags set, a keycode, or includes Fn key.
     public var isValid: Bool {
-        modifierFlags != 0 || keyCode != 0
+        modifierFlags != 0 || storageKeyCode != 0 || includesFnKey
     }
 
-    /// Returns true if this is a modifier-only shortcut (no specific key).
+    /// Returns true if this is a modifier-only shortcut (no specific key, but may include Fn).
     public var isModifierOnly: Bool {
-        keyCode == 0 && !includesFnKey
+        storageKeyCode == 0
     }
 
     /// The default shortcut using Option key (maskAlternate).
     public static var `default`: RecordedShortcut {
-        RecordedShortcut(flags: .maskAlternate, keyCode: 0, includesFnKey: false)
+        // If we want a truly empty default, we could use:
+        // RecordedShortcut(flags: [], keyCode: nil, includesFnKey: false)
+        // But traditionally it defaults to Option key.
+        RecordedShortcut(flags: .maskAlternate, keyCode: nil, includesFnKey: false)
     }
 
     /// Returns a display string with modifier symbols and key (e.g., "⌃⌥A" or "Fn ⌥").
@@ -68,8 +113,15 @@ public struct RecordedShortcut: Codable, Equatable, Sendable {
         }
 
         // Add the key character if not modifier-only
-        if keyCode != 0 {
-            if let char = KeyCodeMap.string(for: keyCode) {
+        if storageKeyCode != 0 {
+            let actualCode = keyCode
+            if let char = KeyCodeMap.string(for: actualCode) {
+                // If the key is F13, we don't need to uppercase it (it's already "F13")
+                // And if it's F13 (105), we might want to check if "Fn" is already displayed?
+                // If includesFnKey is true, we display "Fn".
+                // If key is F13, we display "F13".
+                // If both, "Fn F13".
+                // But standalone F13 (Fn) has includesFnKey=false. So just "F13".
                 parts.append(char.uppercased())
             }
         }
