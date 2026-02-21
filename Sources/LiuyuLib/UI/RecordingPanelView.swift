@@ -17,10 +17,10 @@ struct RecordingPanelView: View {
         HStack(spacing: 16) {
             // WeChat-style animation area
             ZStack {
-                // Contracting rings (recording: from outside to inside)
+                // White contracting rings (recording: from outside to inside)
                 ForEach(0..<3) { i in
                     Circle()
-                        .fill(Color.weChatGreen)
+                        .stroke(Color.white.opacity(0.6), lineWidth: 2)
                         .frame(width: 36, height: 36)
                         .scaleEffect(ringScales[i])
                         .opacity(ringOpacities[i])
