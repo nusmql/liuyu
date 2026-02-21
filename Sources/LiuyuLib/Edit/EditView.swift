@@ -362,7 +362,7 @@ private struct EditViewKeyboardHandler: ViewModifier {
     @State private var lastEscapePressTime: Date?
 
     // Load settings
-    private var recordShortcut: RecordedShortcut { .loadEditRecordShortcut() }
+    private var voiceEditShortcut: RecordedShortcut { .loadEditRecordShortcut() }
     private var clearRequiresDoubleTap: Bool { UserDefaults.standard.bool(forKey: "editClearDoubleTap") }
 
     func body(content: Content) -> some View {
@@ -389,8 +389,8 @@ private struct EditViewKeyboardHandler: ViewModifier {
                         return nil
                     }
 
-                    // Voice record shortcut - Hold to record, release to stop
-                    if self.matchesRecordShortcut(event) {
+                    // Voice edit shortcut - Hold to record edits, release to stop
+                    if self.matchesVoiceEditShortcut(event) {
                         if event.type == .keyDown && !isRecordingViaShortcut {
                             // Only start if currently idle
                             if case .idle = editState {
@@ -435,17 +435,20 @@ private struct EditViewKeyboardHandler: ViewModifier {
         }
     }
 
-    /// Checks if the event matches the custom record shortcut.
-    private func matchesRecordShortcut(_ event: NSEvent) -> Bool {
-        let shortcut = recordShortcut
+    /// Checks if the event matches the Voice Edit shortcut.
+    private func matchesVoiceEditShortcut(_ event: NSEvent) -> Bool {
+        let shortcut = voiceEditShortcut
 
-        // Debug logging
-        Logger.debug("Checking shortcut: keyCode(event:\(event.keyCode), target:\(shortcut.keyCode)), flags:\(shortcut.flags)", category: .hotkey)
+        // Debug logging - more detailed
+        let eventFlagsRaw = event.modifierFlags.rawValue
+        let eventDeviceFlags = event.modifierFlags.intersection(.deviceIndependentFlagsMask).rawValue
+        Logger.debug("Checking shortcut: keyCode(event:\(event.keyCode), target:\(shortcut.keyCode)), eventFlags:\(eventFlagsRaw), eventDeviceFlags:\(eventDeviceFlags), shortcutFlags:\(shortcut.modifierFlags), includesFn:\(shortcut.includesFnKey)", category: .hotkey)
 
         // For modifier-only shortcuts (like Fn+Ctrl), keyCode is 0
         // We only check keyCode if shortcut has a specific key
         if shortcut.keyCode != 0 {
             guard event.keyCode == shortcut.keyCode else {
+                Logger.debug("KeyCode mismatch: event=\(event.keyCode), target=\(shortcut.keyCode)", category: .hotkey)
                 return false
             }
         }
@@ -459,13 +462,15 @@ private struct EditViewKeyboardHandler: ViewModifier {
         if flags.contains(.maskShift) { shortcutModifiers.insert(.shift) }
         if flags.contains(.maskAlternate) { shortcutModifiers.insert(.option) }
         if flags.contains(.maskControl) { shortcutModifiers.insert(.control) }
+        // IMPORTANT: If shortcut includes Fn key, add it to shortcutModifiers for comparison
+        if shortcut.includesFnKey { shortcutModifiers.insert(.function) }
 
         // Check Fn key if needed
         let fnKeyPressed = event.modifierFlags.contains(.function)
         let fnMatch = shortcut.includesFnKey == fnKeyPressed
 
         let modifiersMatch = eventModifiers == shortcutModifiers
-        Logger.debug("Modifiers match: \(modifiersMatch), Fn match: \(fnMatch)", category: .hotkey)
+        Logger.debug("Event modifiers: \(eventModifiers.rawValue), Shortcut modifiers: \(shortcutModifiers.rawValue), Match: \(modifiersMatch), Fn match: \(fnMatch)", category: .hotkey)
 
         return modifiersMatch && fnMatch
     }

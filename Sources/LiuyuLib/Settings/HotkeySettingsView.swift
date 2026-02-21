@@ -6,8 +6,8 @@ struct HotkeySettingsView: View {
     @State private var conflictWarning: String? = nil
 
     // Edit window shortcuts
-    @State private var editRecordShortcut: RecordedShortcut? = RecordedShortcut.loadEditRecordShortcut()
-    @State private var editRecordConflictWarning: String? = nil
+    @State private var editVoiceEditShortcut: RecordedShortcut? = RecordedShortcut.loadEditRecordShortcut()
+    @State private var editVoiceEditConflictWarning: String? = nil
     @State private var clearRequiresDoubleTap: Bool = UserDefaults.standard.bool(forKey: "editClearDoubleTap")
     @State private var silenceTimeout: SilenceTimeoutOption = SilenceTimeoutOption.loadFromDefaults()
     @State private var useClickMode: Bool = UserDefaults.standard.bool(forKey: "hotkeyUseClickMode")
@@ -52,13 +52,13 @@ struct HotkeySettingsView: View {
                     Divider()
                         .padding(.leading, 140)
 
-                    // Voice Record Shortcut Row
+                    // Voice Edit Shortcut Row
                     HStack(spacing: 16) {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("Voice Record")
+                            Text("Voice Edit")
                                 .font(.system(size: 13))
 
-                            Text("Hold in Edit window")
+                            Text("Hold in Edit window to edit text")
                                 .font(.system(size: 11))
                                 .foregroundStyle(.secondary)
                         }
@@ -67,19 +67,19 @@ struct HotkeySettingsView: View {
                         Spacer()
 
                         HStack(spacing: 8) {
-                            if let warning = editRecordConflictWarning {
+                            if let warning = editVoiceEditConflictWarning {
                                 Image(systemName: "exclamationmark.triangle")
                                     .foregroundStyle(.orange)
                                     .font(.caption)
                                     .help(warning)
                             }
 
-                            ShortcutRecorderView(shortcut: $editRecordShortcut, onBeginRecording: {
-                                self.editRecordShortcut = nil
+                            ShortcutRecorderView(shortcut: $editVoiceEditShortcut, onBeginRecording: {
+                                self.editVoiceEditShortcut = nil
                             })
                                 .frame(width: 140, height: 28)
-                                .onChange(of: editRecordShortcut) { newValue in
-                                    checkEditRecordConflicts(for: newValue)
+                                .onChange(of: editVoiceEditShortcut) { newValue in
+                                    checkEditVoiceEditConflicts(for: newValue)
                                     newValue?.saveEditRecordShortcut()
                                 }
                         }
@@ -153,8 +153,8 @@ struct HotkeySettingsView: View {
         conflictWarning = systemConflictWarning(for: shortcut)
     }
 
-    private func checkEditRecordConflicts(for shortcut: RecordedShortcut?) {
-        editRecordConflictWarning = systemConflictWarning(for: shortcut)
+    private func checkEditVoiceEditConflicts(for shortcut: RecordedShortcut?) {
+        editVoiceEditConflictWarning = systemConflictWarning(for: shortcut)
     }
 
     private func systemConflictWarning(for shortcut: RecordedShortcut?) -> String? {

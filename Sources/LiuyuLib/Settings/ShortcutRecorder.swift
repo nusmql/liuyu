@@ -282,10 +282,23 @@ public class ShortcutRecorder: NSView {
             DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
                 let code = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
+                let flags = event.flags
+
+                // Capture modifiers at keyDown time too (they might not be in accumulatedFlags yet)
+                var cgFlags: CGEventFlags = []
+                if flags.contains(.maskControl) { cgFlags.insert(.maskControl) }
+                if flags.contains(.maskAlternate) { cgFlags.insert(.maskAlternate) }
+                if flags.contains(.maskShift) { cgFlags.insert(.maskShift) }
+                if flags.contains(.maskCommand) { cgFlags.insert(.maskCommand) }
+                self.accumulatedFlags.formUnion(cgFlags)
+
                 // F13 (105) is treated as a regular function key (mapped from Fn via Karabiner)
                 // We don't set includesFnKey for it - it's just a regular keyCode
-                if event.flags.contains(.maskSecondaryFn) { self.currentIncludesFnKey = true }
+                if flags.contains(.maskSecondaryFn) { self.currentIncludesFnKey = true }
                 self.currentKeyCode = code
+
+                Logger.debug("ShortcutRecorder: keyDown code=\(code), flags=\(flags.rawValue), accumulated=\(self.accumulatedFlags.rawValue)", category: .settings)
+
                 self.finishRecording()
             }
             return Unmanaged.passUnretained(event)

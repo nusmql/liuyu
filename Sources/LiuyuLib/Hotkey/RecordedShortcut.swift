@@ -190,30 +190,31 @@ public extension RecordedShortcut {
         }
     }
 
-    // MARK: - Edit Window Record Shortcut Persistence
+    // MARK: - Edit Window Voice Edit Shortcut Persistence
 
+    // Note: Key name kept as "editRecordShortcut" for backward compatibility
     private static let editRecordDefaultsKey = "editRecordShortcut"
 
-    /// The default edit record shortcut: Cmd+R
+    /// The default Voice Edit shortcut: Cmd+R (hold in Edit window to edit text via voice)
     static var defaultEditRecordShortcut: RecordedShortcut {
         RecordedShortcut(flags: .maskCommand, keyCode: 15, includesFnKey: false) // Cmd+R
     }
 
-    /// Loads the edit record shortcut from UserDefaults, or returns Cmd+R if none exists.
+    /// Loads the Voice Edit shortcut from UserDefaults, or returns Cmd+R if none exists.
     static func loadEditRecordShortcut() -> RecordedShortcut {
         guard let data = UserDefaults.standard.data(forKey: editRecordDefaultsKey) else {
             return .defaultEditRecordShortcut
         }
 
         do {
-            let shortcut = try JSONDecoder().decode(RecordedShortcut.self, from: data) 
+            let shortcut = try JSONDecoder().decode(RecordedShortcut.self, from: data)
             return shortcut
         } catch {
             return .defaultEditRecordShortcut
         }
     }
 
-    /// Saves this RecordedShortcut as the edit record shortcut.
+    /// Saves this RecordedShortcut as the Voice Edit shortcut.
     func saveEditRecordShortcut() {
         do {
             let data = try JSONEncoder().encode(self)
