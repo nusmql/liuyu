@@ -7,37 +7,23 @@ struct RecordingPanelView: View {
     let onClose: () -> Void
 
     // Animation states
-    @State private var ringScales: [CGFloat] = [0.5, 0.5, 0.5]
-    @State private var ringOpacities: [Double] = [1, 1, 1]
+    @State private var ringScales: [CGFloat] = [2.5, 2.5, 2.5]
+    @State private var ringOpacities: [Double] = [0.5, 0.5, 0.5]
     @State private var arrowRotation: Double = 0
     @State private var showMic: Bool = true
     @State private var showArrow: Bool = false
-    @State private var isContracting: Bool = false
 
     var body: some View {
         HStack(spacing: 16) {
             // WeChat-style animation area
             ZStack {
-                // Expanding rings (recording phase)
-                if !isContracting {
-                    ForEach(0..<3) { i in
-                        Circle()
-                            .fill(Color.weChatGreen)
-                            .frame(width: 36, height: 36)
-                            .scaleEffect(ringScales[i])
-                            .opacity(ringOpacities[i])
-                    }
-                }
-
-                // Contracting rings (processing transition)
-                if isContracting {
-                    ForEach(0..<3) { i in
-                        Circle()
-                            .stroke(Color.weChatGreen.opacity(0.3), lineWidth: 2)
-                            .frame(width: 36, height: 36)
-                            .scaleEffect(ringScales[i])
-                            .opacity(ringOpacities[i])
-                    }
+                // Contracting rings (recording: from outside to inside)
+                ForEach(0..<3) { i in
+                    Circle()
+                        .fill(Color.weChatGreen)
+                        .frame(width: 36, height: 36)
+                        .scaleEffect(ringScales[i])
+                        .opacity(ringOpacities[i])
                 }
 
                 // Center circle (always present)
@@ -118,11 +104,16 @@ struct RecordingPanelView: View {
     }
 
     private func startAnimation() {
-        // Start expanding rings animation
+        // Recording: rings contract from outside to inside
         for i in 0..<3 {
-            DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 0.5) {
-                withAnimation(.easeOut(duration: 1.5).repeatForever(autoreverses: false)) {
-                    ringScales[i] = 2.5
+            DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 0.3) {
+                // Start from expanded
+                ringScales[i] = 2.5
+                ringOpacities[i] = 0.5
+
+                // Animate inward (contracting)
+                withAnimation(.easeIn(duration: 1.0).repeatForever(autoreverses: false)) {
+                    ringScales[i] = 0.8
                     ringOpacities[i] = 0
                 }
             }
@@ -132,26 +123,13 @@ struct RecordingPanelView: View {
     private func handleStateChange(_ newState: PanelState) {
         switch newState {
         case .processing:
-            // Contract rings toward center
-            isContracting = true
-            showMic = false
-
-            // Reset rings for contraction animation
-            for i in 0..<3 {
-                ringScales[i] = 2.0 - CGFloat(i) * 0.3
-                ringOpacities[i] = 0.5
+            // Processing: mic fades out, arrow fades in and rotates
+            withAnimation(.easeOut(duration: 0.3)) {
+                showMic = false
             }
 
-            // Animate contraction
-            withAnimation(.easeIn(duration: 0.4)) {
-                for i in 0..<3 {
-                    ringScales[i] = 0.8
-                    ringOpacities[i] = 0
-                }
-            }
-
-            // Show arrow and start rotation after contraction
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            // Show arrow and start rotation
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
                 showArrow = true
                 withAnimation(.linear(duration: 1.0).repeatForever(autoreverses: false)) {
                     arrowRotation = 360
