@@ -57,6 +57,8 @@ struct EditView: View {
 
     @ViewBuilder
     private var contentArea: some View {
+        // Force evaluation of the logger
+        let _ = Logger.debug("=== contentArea EVALUATING ===", category: .ui)
         let _ = Logger.debug("contentArea: hasText=\(viewModel.hasText)", category: .ui)
         if viewModel.hasText {
             // Has text: TextEditor fills available space, mic area fixed at bottom

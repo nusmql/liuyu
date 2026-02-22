@@ -34,9 +34,11 @@ class EditWindowController: NSObject, NSWindowDelegate {
     func showWithText(_ text: String, onInsert: @escaping (String) -> Void) {
         // If window already visible, just update the text and bring to front
         if let window, window.isVisible {
+            Logger.debug("showWithText: window already visible, updating text", category: .ui)
             // Clear previous text before setting new text
             editViewModel?.clear()
             editViewModel?.text = text
+            Logger.debug("showWithText: text set to '\(text.prefix(20))...', hasText=\(editViewModel?.hasText ?? false)", category: .ui)
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             return
