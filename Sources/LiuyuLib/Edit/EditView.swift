@@ -401,6 +401,15 @@ struct MacTextEditor: NSViewRepresentable {
         }
         // Update the coordinator's reference to parent to ensure callbacks work
         context.coordinator.updateParent(self)
+
+        // Ensure text view becomes first responder when window is key
+        // This fixes the issue where Return key doesn't work after window appears
+        if let window = textView.window, window.isKeyWindow {
+            if window.firstResponder !== textView {
+                Logger.debug("MacTextEditor: Making textView first responder", category: .ui)
+                window.makeFirstResponder(textView)
+            }
+        }
     }
 
     func makeCoordinator() -> Coordinator {

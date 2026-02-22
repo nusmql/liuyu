@@ -41,6 +41,11 @@ class EditWindowController: NSObject, NSWindowDelegate {
             Logger.debug("showWithText: text set to '\(text.prefix(20))...', hasText=\(editViewModel?.hasText ?? false)", category: .ui)
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
+
+            // Delay to ensure the view is updated, then focus the text field
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                self.focusTextField(in: window)
+            }
             return
         }
 
@@ -114,6 +119,33 @@ class EditWindowController: NSObject, NSWindowDelegate {
 
     func windowShouldZoom(_ window: NSWindow, toFrame newFrame: NSRect) -> Bool {
         false
+    }
+
+    // MARK: - Focus
+
+    /// Recursively finds the NSTextView in the view hierarchy and makes it first responder
+    private func focusTextField(in window: NSWindow) {
+        guard let contentView = window.contentView else { return }
+
+        if let textView = findTextView(in: contentView) {
+            Logger.debug("EditWindowController: Focusing NSTextView", category: .ui)
+            window.makeFirstResponder(textView)
+        }
+    }
+
+    /// Recursively searches for NSTextView in the view hierarchy
+    private func findTextView(in view: NSView) -> NSTextView? {
+        if let textView = view as? NSTextView {
+            return textView
+        }
+
+        for subview in view.subviews {
+            if let textView = findTextView(in: subview) {
+                return textView
+            }
+        }
+
+        return nil
     }
 
     // MARK: - Insert
