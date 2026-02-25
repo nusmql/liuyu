@@ -74,7 +74,10 @@ public struct ProviderDefinition: Sendable {
             type: .alibaba,
             sttEndpoint: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
             llmEndpoint: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
-            sttModels: ["qwen3-asr-flash"],
+            sttModels: [
+                "qwen3-asr-flash",              // REST API
+                "nls-realtime-asr",              // WebSocket Real-time
+            ],
             llmModels: ["qwen-turbo"],
             sttApiFormat: .chatCompletionsAudio,
             apiKeyURL: "https://dashscope.console.aliyun.com/apiKey"

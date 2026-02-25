@@ -21,10 +21,7 @@ public enum TranscriptionStrategyFactory {
 
         case .alibabaRealtime:
             // Alibaba Cloud real-time speech recognition via WebSocket
-            // TODO: Implement AlibabaRealtimeAdapter
-            // For now, fall back to REST strategy
-            Logger.warning("AlibabaRealtime not yet implemented, falling back to REST", category: .stt)
-            return RESTStrategy(apiFormat: .whisperMultipart)
+            return AlibabaRealtimeAdapter()
 
         case .tencentRealtime:
             // Tencent Cloud real-time speech recognition via WebSocket
@@ -49,6 +46,31 @@ public enum TranscriptionStrategyFactory {
             provider: config.provider,
             apiFormat: definition.sttApiFormat
         )
+    }
+
+    /// Creates a strategy from provider, model, and explicit API format
+    /// This is the recommended method when both provider and model are known
+    public static func createStrategy(
+        provider: ProviderType,
+        model: String,
+        apiFormat: ApiFormat? = nil
+    ) -> TranscriptionStrategy {
+        // If explicit API format is provided, use it
+        if let apiFormat = apiFormat {
+            return createStrategy(provider: provider, apiFormat: apiFormat)
+        }
+
+        // Otherwise, infer from model name
+        switch (provider, model) {
+        case (.alibaba, "nls-realtime-asr"):
+            return AlibabaRealtimeAdapter()
+        default:
+            // Fall back to catalog definition
+            guard let definition = ProviderDefinition.catalog[provider] else {
+                return RESTStrategy(apiFormat: .whisperMultipart)
+            }
+            return createStrategy(provider: provider, apiFormat: definition.sttApiFormat)
+        }
     }
 }
 

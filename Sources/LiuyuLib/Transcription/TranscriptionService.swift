@@ -64,9 +64,10 @@ public final class TranscriptionService: Sendable {
             provider = .openai
         }
 
-        // Create the appropriate strategy based on provider and format
+        // Create the appropriate strategy based on provider, model, and format
         self.strategy = TranscriptionStrategyFactory.createStrategy(
             provider: provider,
+            model: model,
             apiFormat: apiFormat
         )
     }
