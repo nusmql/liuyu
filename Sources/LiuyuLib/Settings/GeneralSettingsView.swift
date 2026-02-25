@@ -32,6 +32,10 @@ struct GeneralSettingsView: View {
                     if !accessibilityGranted {
                         Button("Grant") {
                             HotkeyManager.requestAccessibilityPermission()
+                            // Re-activate app after opening System Settings
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                                NSApp.activate(ignoringOtherApps: true)
+                            }
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
@@ -53,7 +57,11 @@ struct GeneralSettingsView: View {
                         Button("Grant") {
                             Task {
                                 let granted = await RecordingController.requestMicrophonePermission()
-                                await MainActor.run { microphoneGranted = granted }
+                                await MainActor.run {
+                                    microphoneGranted = granted
+                                    // Re-activate app after permission dialog closes
+                                    NSApp.activate(ignoringOtherApps: true)
+                                }
                             }
                         }
                         .buttonStyle(.bordered)

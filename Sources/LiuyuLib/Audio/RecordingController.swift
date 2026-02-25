@@ -7,7 +7,7 @@ import Combine
 public class RecordingController: ObservableObject {
     @Published public var audioLevel: Float = 0.0
 
-    private lazy var engine = AVAudioEngine()
+    private var engine: AVAudioEngine?
     private var tempFileURL: URL?
     private var isWarmedUp = false
     private var converter: AVAudioConverter?
@@ -45,7 +45,6 @@ public class RecordingController: ObservableObject {
                 }
                 Logger.info("Audio device changed — re-warming engine", category: .audio)
                 self.coolDown()
-                try? self.warmUp()
             }
         }
     }
@@ -84,14 +83,27 @@ public class RecordingController: ObservableObject {
     public func warmUp() throws {
         guard !isWarmedUp else { return }
 
-        // Clean slate — important if a previous warmUp attempt failed
-        engine.reset()
+        // Create a fresh engine instance to avoid stale format caches from previous devices
+        let newEngine = AVAudioEngine()
+        self.engine = newEngine
 
-        let inputNode = engine.inputNode
-        let inputFormat = inputNode.outputFormat(forBus: 0)
+        let inputNode = newEngine.inputNode
+
+        // After sleep/wake or device change, inputNode may report stale format.
+        // Retry multiple times with increasing delays to sync with hardware.
+        var inputFormat = inputNode.outputFormat(forBus: 0)
+        var retries = 0
+        let maxRetries = 5
+
+        while (inputFormat.sampleRate == 0 || inputFormat.channelCount == 0) && retries < maxRetries {
+            Thread.sleep(forTimeInterval: 0.05 * Double(retries + 1))
+            inputFormat = inputNode.outputFormat(forBus: 0)
+            retries += 1
+        }
 
         guard inputFormat.sampleRate > 0 else {
-            Logger.error("No audio input available (sample rate = 0)", category: .audio)
+            Logger.error("No audio input available after \(maxRetries) retries", category: .audio)
+            self.engine = nil
             return
         }
 
@@ -105,28 +117,28 @@ public class RecordingController: ObservableObject {
                          converter: converter, audioState: audioState, controller: self)
 
         // Pre-allocate audio resources before starting
-        engine.prepare()
+        newEngine.prepare()
 
         do {
-            try engine.start()
+            try newEngine.start()
             isWarmedUp = true
             Logger.info("Engine warmed up — pre-roll buffering active", category: .audio)
         } catch {
             inputNode.removeTap(onBus: 0)
-            engine.stop()
-            engine.reset()
+            newEngine.stop()
             self.converter = nil
+            self.engine = nil
             throw RecordingError.engineStartFailed(error)
         }
     }
 
     /// Release the audio engine and microphone.
     public func coolDown() {
-        guard isWarmedUp else { return }
+        guard isWarmedUp, let engine = engine else { return }
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
-        engine.reset()
         converter = nil
+        self.engine = nil
         isWarmedUp = false
         audioState.clear()
         Logger.info("Engine cooled down", category: .audio)
@@ -138,7 +150,7 @@ public class RecordingController: ObservableObject {
     /// Pre-roll audio (~0.5s captured before this call) is flushed to the file.
     public func start() throws {
         // Re-warm if engine died (e.g. after system sleep)
-        if isWarmedUp && !engine.isRunning {
+        if isWarmedUp && !(engine?.isRunning ?? false) {
             coolDown()
         }
         if !isWarmedUp {
