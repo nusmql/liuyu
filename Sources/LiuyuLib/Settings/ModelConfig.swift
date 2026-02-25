@@ -18,6 +18,10 @@ public enum ApiFormat: String, Codable, Sendable {
     case whisperMultipart
     /// Chat completions with base64 audio content (e.g. Alibaba Qwen ASR).
     case chatCompletionsAudio
+    /// Alibaba Cloud real-time speech recognition (WebSocket streaming)
+    case alibabaRealtime
+    /// Tencent Cloud real-time speech recognition (WebSocket streaming)
+    case tencentRealtime
 }
 
 public struct ProviderDefinition: Sendable {
