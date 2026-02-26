@@ -341,15 +341,18 @@ public class RecordingController: ObservableObject {
         ) else { return }
 
         var error: NSError?
-        // The converter calls this block synchronously, so the capture is safe.
-        // Use nonisolated(unsafe) to silence the Swift 6 concurrency warning.
-        nonisolated(unsafe) var hasData = false
+        // Use a simple class wrapper to safely track state within the synchronous conversion block
+        // The converter calls this block synchronously on the same thread, so this is safe
+        final class DataFlag: @unchecked Sendable {
+            var value = false
+        }
+        let hasData = DataFlag()
         converter.convert(to: convertedBuffer, error: &error) { _, status in
-            if hasData {
+            if hasData.value {
                 status.pointee = .noDataNow
                 return nil
             }
-            hasData = true
+            hasData.value = true
             status.pointee = .haveData
             return buffer
         }

@@ -27,8 +27,8 @@ public enum TranscriptionError: Error, LocalizedError, Sendable {
 
 /// Streaming transcription session for real-time audio
 /// Used by WebSocket-based strategies to receive audio chunks as they arrive
-@MainActor
-public final class StreamingTranscriptionSession: Sendable {
+/// This class is an actor to ensure thread-safe access to connection state
+public actor StreamingTranscriptionSession {
     private let strategy: TranscriptionStrategy
     private let config: TranscriptionConfig
     private var isConnected = false
@@ -59,7 +59,8 @@ public final class StreamingTranscriptionSession: Sendable {
     /// Receive transcription results as a stream
     /// For WebSocket: yields partial results during streaming, final result at end
     /// For REST: yields final result only
-    public func receiveResults() -> AsyncStream<TranscriptionResult> {
+    /// This is nonisolated because AsyncStream is Sendable and the strategy handles its own isolation
+    nonisolated public func receiveResults() -> AsyncStream<TranscriptionResult> {
         strategy.receiveResults()
     }
 
@@ -68,6 +69,9 @@ public final class StreamingTranscriptionSession: Sendable {
         await strategy.disconnect()
         isConnected = false
     }
+
+    /// Check if the session is currently connected
+    public var connected: Bool { isConnected }
 }
 
 /// Unified transcription service that automatically selects the appropriate strategy

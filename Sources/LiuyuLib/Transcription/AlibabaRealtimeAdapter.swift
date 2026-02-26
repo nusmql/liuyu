@@ -38,6 +38,13 @@ public actor AlibabaRealtimeAdapter: WebSocketStrategy {
 
     public init() {}
 
+    deinit {
+        // Ensure any pending continuation is resumed to prevent hangs
+        if let continuation = taskStartedContinuation {
+            continuation.resume()
+        }
+    }
+
     // MARK: - WebSocketStrategy Implementation
 
     /// Build WebSocket URL for DashScope API
@@ -206,16 +213,16 @@ public actor AlibabaRealtimeAdapter: WebSocketStrategy {
         Logger.info("🎬 [CONN-WAIT] Waiting for task-started event...", category: .stt)
 
         // Use withTaskGroup to race between task-started and timeout
-        let taskStartedResult: Bool = await withTaskGroup(of: Bool.self) { [weak self] group in
-            guard let self = self else { return false }
-
+        // Capture self strongly since the adapter lifecycle is tied to the streaming session
+        let taskStartedResult: Bool = await withTaskGroup(of: Bool.self) { group in
             // Task 1: Wait for task-started event
-            group.addTask {
+            group.addTask { [self] in
                 // Wait for handleTaskStarted to resume this continuation
                 await withCheckedContinuation { continuation in
-                    // Capture continuation on the actor
-                    Task { [weak self] in
-                        await self?.storeContinuation(continuation)
+                    // Store continuation on the actor - self is captured strongly
+                    // because this task's lifecycle is tied to the adapter
+                    Task { [self] in
+                        await self.storeContinuation(continuation)
                     }
                 }
                 return true // task-started received

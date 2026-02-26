@@ -88,6 +88,8 @@ public actor WebSocketManager {
     private let heartbeatInterval: TimeInterval
     private var webSocketDelegate: WebSocketDelegate?
     private var messageHandler: MessageHandler?
+    private var connectionContinuation: CheckedContinuation<Void, Error>?
+    private var connectionTimeoutTask: Task<Void, Never>?
 
     public init(
         heartbeatInterval: TimeInterval = 30,
@@ -129,44 +131,58 @@ public actor WebSocketManager {
         delegate.onOpen = { [weak self] in
             Logger.info("🎬 [WS-DELEGATE] Connection opened", category: .stt)
             Task { [weak self] in
-                await self?.setConnected(true)
+                await self?.completeConnection(success: true)
             }
         }
         delegate.onClose = { code, reason in
             Logger.warning("🎬 [WS-DELEGATE] WebSocket closed with code: \(code)", category: .stt)
         }
-        delegate.onError = { error in
+        delegate.onError = { [weak self] error in
             Logger.error("🎬 [WS-DELEGATE] WebSocket delegate error: \(error)", category: .stt)
+            Task { [weak self] in
+                await self?.completeConnection(success: false, error: error)
+            }
         }
 
         // Set up message handler
         setupMessageHandler()
 
-        // Connect
+        // Connect with proper timeout handling
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            // Store continuation for later resumption
+            self.connectionContinuation = continuation
+
+            // Start timeout task
+            self.connectionTimeoutTask = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 3_000_000_000) // 3 seconds
+                await self?.completeConnection(success: false, error: TranscriptionError.networkError("WebSocket connection timeout"))
+            }
+
+            // Start WebSocket connection
             webSocketTask?.resume()
             Logger.debug("WebSocket task resumed", category: .stt)
-
-            // Wait for connection to establish
-            Task { [weak self] in
-                guard let self = self else {
-                    continuation.resume(throwing: TranscriptionError.networkError("WebSocket connection timeout"))
-                    return
-                }
-                try? await Task.sleep(nanoseconds: 3_000_000_000) // 3 seconds
-                let connected = await self.isConnected
-                Logger.debug("WebSocket connection check: isConnected=\(connected)", category: .stt)
-                if connected {
-                    continuation.resume()
-                } else {
-                    continuation.resume(throwing: TranscriptionError.networkError("WebSocket connection timeout"))
-                }
-            }
         }
     }
 
-    private func setConnected(_ value: Bool) {
-        isConnected = value
+    /// Complete the connection by resuming the continuation
+    private func completeConnection(success: Bool, error: Error? = nil) {
+        // Cancel timeout task if still running
+        connectionTimeoutTask?.cancel()
+        connectionTimeoutTask = nil
+
+        // Resume continuation if not already resumed
+        if let continuation = connectionContinuation {
+            connectionContinuation = nil
+            if success {
+                isConnected = true
+                continuation.resume()
+            } else {
+                // Cancel WebSocket task on failure
+                webSocketTask?.cancel()
+                let errorToThrow = error ?? TranscriptionError.networkError("WebSocket connection failed")
+                continuation.resume(throwing: errorToThrow)
+            }
+        }
     }
 
     public func sendJSON(_ object: [String: Any]) async throws {
