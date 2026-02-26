@@ -134,7 +134,11 @@ public class RecordingController: ObservableObject {
                 userInfo: [NSLocalizedDescriptionKey: "Audio input not available after sleep/wake"]))
         }
 
-        let pcmFormat = AVAudioFormat(standardFormatWithSampleRate: 16000, channels: 1)!
+        // Create 16-bit PCM format (not Float32) for WebSocket streaming compatibility
+        guard let pcmFormat = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16000, channels: 1, interleaved: true) else {
+            throw RecordingError.engineStartFailed(NSError(domain: "RecordingController", code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "Failed to create 16-bit PCM audio format"]))
+        }
         let converter = AVAudioConverter(from: inputFormat, to: pcmFormat)
         self.converter = converter
 
@@ -176,6 +180,16 @@ public class RecordingController: ObservableObject {
     /// Start recording. The engine must be warmed up (done automatically if needed).
     /// Pre-roll audio (~0.5s captured before this call) is flushed to the file.
     public func start() throws {
+        try startInternal(skipFileCreation: false)
+    }
+
+    /// Start recording in streaming mode (no file creation).
+    /// Used for WebSocket streaming where audio is sent directly to server.
+    public func startStreaming() throws {
+        try startInternal(skipFileCreation: true)
+    }
+
+    private func startInternal(skipFileCreation: Bool) throws {
         // Re-warm if engine died (e.g. after system sleep)
         if isWarmedUp && !(engine?.isRunning ?? false) {
             coolDown()
@@ -184,24 +198,27 @@ public class RecordingController: ObservableObject {
             try warmUp()
         }
 
-        // Create temp WAV file (16 kHz, mono, 16-bit PCM)
-        let tempURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("liuyu_\(UUID().uuidString).wav")
+        var audioFile: AVAudioFile? = nil
+        var tempURL: URL? = nil
 
-        let outputSettings: [String: Any] = [
-            AVFormatIDKey: Int(kAudioFormatLinearPCM),
-            AVSampleRateKey: 16000,
-            AVNumberOfChannelsKey: 1,
-            AVLinearPCMBitDepthKey: 16,
-            AVLinearPCMIsFloatKey: false,
-            AVLinearPCMIsBigEndianKey: false
-        ]
+        if !skipFileCreation {
+            // Create temp WAV file using explicit 16-bit PCM settings
+            // This ensures format compatibility with the converter output
+            tempURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("liuyu_\(UUID().uuidString).wav")
 
-        let audioFile: AVAudioFile
-        do {
-            audioFile = try AVAudioFile(forWriting: tempURL, settings: outputSettings)
-        } catch {
-            throw RecordingError.fileCreationFailed(error)
+            // Create format that matches the converter output exactly
+            guard let outputFormat = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16000, channels: 1, interleaved: true) else {
+                throw RecordingError.engineStartFailed(NSError(domain: "RecordingController", code: -1,
+                    userInfo: [NSLocalizedDescriptionKey: "Failed to create output audio format"]))
+            }
+
+            do {
+                audioFile = try AVAudioFile(forWriting: tempURL!, settings: outputFormat.settings)
+                Logger.debug("Created audio file with format: \(outputFormat)", category: .audio)
+            } catch {
+                throw RecordingError.fileCreationFailed(error)
+            }
         }
 
         // Atomically flush pre-roll buffers to file and start recording
@@ -216,6 +233,7 @@ public class RecordingController: ObservableObject {
     /// Stop recording and return the temp file URL.
     /// The engine stays warm for the next recording.
     public func stop() -> URL? {
+        // stopRecording() internally waits for audio engine to settle
         audioState.stopRecording()
 
         // Log file size for debugging
@@ -255,6 +273,29 @@ public class RecordingController: ObservableObject {
         try? FileManager.default.removeItem(at: url)
     }
 
+    // MARK: - Streaming Support
+
+    /// Set the streaming handler for real-time audio streaming
+    /// This enables WebSocket-based transcription to receive audio chunks as they arrive
+    public func setStreamingHandler(_ handler: AudioChunkHandler?) {
+        audioState.setStreamingHandler(handler)
+        if handler != nil {
+            Logger.info("🎬 [A1] Audio streaming handler registered", category: .audio)
+        }
+    }
+
+    /// Flush any remaining accumulated audio data (call when stopping recording)
+    /// Returns the accumulated data that needs to be sent, or nil if nothing to send
+    public func flushStreamingData() -> Data? {
+        Logger.info("🎬 [FLUSH] Flushing streaming data...", category: .audio)
+        return audioState.flushAccumulatedData()
+    }
+
+    /// Clear streaming state after flushing data
+    public func clearStreamingState() {
+        audioState.clearStreamingState()
+    }
+
     // MARK: - Audio Processing (called from audio render thread)
 
     fileprivate nonisolated func processBuffer(_ buffer: AVAudioPCMBuffer,
@@ -287,7 +328,10 @@ public class RecordingController: ObservableObject {
         }
 
         // Convert to 16kHz mono PCM
-        guard let converter else { return }
+        guard let converter else {
+            Logger.debug("🎬 [PROCESS] No converter, skipping", category: .audio)
+            return
+        }
         let outputFrameCapacity = AVAudioFrameCount(
             ceil(Double(buffer.frameLength) * (16000.0 / buffer.format.sampleRate))
         )
@@ -319,17 +363,27 @@ public class RecordingController: ObservableObject {
 
 // MARK: - Thread-Safe Audio State
 
+/// Audio chunk callback for streaming
+/// Returns true if the chunk was successfully processed (for async tracking)
+public typealias AudioChunkHandler = @Sendable (Data) -> Void
+
 /// Shared state between @MainActor (start/stop) and the audio render thread (tap callback).
-/// Routes converted PCM buffers to either a pre-roll ring buffer or the active audio file.
+/// Routes converted PCM buffers to either a pre-roll ring buffer, audio file, or streaming handler.
 fileprivate final class AudioState: @unchecked Sendable {
     private let lock = NSLock()
     private var _isRecording = false
     private var _audioFile: AVAudioFile?
     private var _preRollBuffers: [AVAudioPCMBuffer] = []
+    private var _streamingHandler: AudioChunkHandler?
+    private var _accumulatedData: Data = Data()
+    private var _lastSentTime: Date = Date()
 
     // At 16kHz input with 1024-frame tap buffers at ~48kHz, each callback ≈ 21ms.
     // 48 buffers ≈ 1.0 seconds of pre-roll audio (increased from 24 for better capture).
     private let maxPreRollCount = 48
+
+    // Stream chunk size: ~300ms of 16kHz 16-bit mono = 9600 bytes
+    private let streamChunkSize = 9600
 
     var isRecording: Bool {
         lock.lock()
@@ -337,36 +391,143 @@ fileprivate final class AudioState: @unchecked Sendable {
         return _isRecording
     }
 
+    /// Set the streaming handler for real-time audio streaming (e.g., WebSocket)
+    /// If audio has been recorded before the handler was set, it will be buffered in _accumulatedData
+    /// and sent when the handler is set.
+    func setStreamingHandler(_ handler: AudioChunkHandler?) {
+        lock.lock()
+        _streamingHandler = handler
+
+        // If we have buffered audio data and a handler is being set, send the buffered data
+        if let handler = handler, !_accumulatedData.isEmpty {
+            let bufferedData = _accumulatedData
+            _accumulatedData = Data()
+            lock.unlock()
+            Logger.info("🎬 [HANDLER-SET] Sending \(bufferedData.count) bytes of buffered audio", category: .audio)
+            handler(bufferedData)
+            return
+        }
+
+        lock.unlock()
+    }
+
     /// Called from audio thread on each tap callback.
-    /// If recording: writes directly to audio file.
+    /// If recording: writes to file AND streams if handler is set.
     /// If not recording: stores in ring buffer (oldest evicted when full).
     func handleBuffer(_ buffer: AVAudioPCMBuffer) {
         lock.lock()
-        if _isRecording, let file = _audioFile {
-            // Hold strong reference to file, then unlock before I/O
-            lock.unlock()
-            try? file.write(from: buffer)
-        } else {
-            _preRollBuffers.append(buffer)
-            if _preRollBuffers.count > maxPreRollCount {
-                _preRollBuffers.removeFirst()
+
+        Logger.debug("🎬 [HANDLE] isRecording=\(_isRecording), handler=\(_streamingHandler != nil), frameLength=\(buffer.frameLength)", category: .audio)
+
+        // Convert buffer to PCM data
+        let pcmData = convertBufferToData(buffer)
+
+        if _isRecording {
+            // Write to file for persistence
+            if let file = _audioFile {
+                lock.unlock()
+                do {
+                    try file.write(from: buffer)
+                } catch {
+                    Logger.error("Failed to write audio buffer: \(error)", category: .audio)
+                }
+                lock.lock()
             }
+
+            // Stream for real-time recognition
+            // ALWAYS accumulate data when recording (even if handler not set yet)
+            if let data = pcmData {
+                _accumulatedData.append(data)
+                Logger.debug("🎬 [ACCUMULATE] Added \(data.count) bytes, total: \(_accumulatedData.count)", category: .audio)
+
+                // Send chunk when accumulated enough (~300ms) and handler is set
+                if let handler = _streamingHandler, _accumulatedData.count >= streamChunkSize {
+                    let chunkToSend = _accumulatedData
+                    _accumulatedData = Data()
+                    _lastSentTime = Date()
+                    lock.unlock()
+                    Logger.info("🎬 [SEND-CHUNK] Sending \(chunkToSend.count) bytes", category: .audio)
+                    handler(chunkToSend)
+                    return
+                }
+            }
+        } else {
+            // Not recording: store in pre-roll buffer
+            if pcmData != nil {
+                _preRollBuffers.append(buffer)
+                if _preRollBuffers.count > maxPreRollCount {
+                    _preRollBuffers.removeFirst()
+                }
+            }
+        }
+
+        lock.unlock()
+    }
+
+    /// Flush any remaining accumulated data (call when stopping recording)
+    /// Returns the accumulated data that needs to be sent, or nil if nothing to send
+    func flushAccumulatedData() -> Data? {
+        lock.lock()
+        Logger.info("🎬 [FLUSH-AUDIO] accumulated: \(_accumulatedData.count) bytes", category: .audio)
+        if !_accumulatedData.isEmpty {
+            let remainingData = _accumulatedData
+            _accumulatedData = Data()
             lock.unlock()
+            Logger.info("🎬 [FLUSH-AUDIO] Returning \(remainingData.count) bytes to send", category: .audio)
+            return remainingData
+        } else {
+            lock.unlock()
+            return nil
         }
     }
 
     /// Called from MainActor. Flushes pre-roll buffers to file, then starts recording.
     /// The lock ensures no gap between pre-roll flush and live recording.
-    func startRecording(audioFile: AVAudioFile) {
+    func startRecording(audioFile: AVAudioFile? = nil) {
         lock.lock()
-        // Write buffered pre-roll audio to file first
+        // Write buffered pre-roll audio to file first (if file is provided)
         let preRollCount = _preRollBuffers.count
-        for buffer in _preRollBuffers {
-            try? audioFile.write(from: buffer)
+
+        // Process pre-roll buffers: accumulate for streaming AND write to file
+        if !_preRollBuffers.isEmpty {
+            Logger.info("🎬 [A2] Processing pre-roll: \(_preRollBuffers.count) buffers", category: .audio)
+
+            // Accumulate for streaming
+            for buffer in _preRollBuffers {
+                if let data = convertBufferToData(buffer) {
+                    _accumulatedData.append(data)
+                }
+            }
+
+            // Write to file if provided (non-streaming mode)
+            if let file = audioFile {
+                for buffer in _preRollBuffers {
+                    do {
+                        try file.write(from: buffer)
+                    } catch {
+                        Logger.error("Failed to write pre-roll buffer: \(error)", category: .audio)
+                    }
+                }
+            }
+
+            // If handler is already set and we have enough data, send immediately
+            if let handler = _streamingHandler, _accumulatedData.count >= streamChunkSize {
+                let preRollData = _accumulatedData
+                _accumulatedData = Data()
+                lock.unlock()
+                Logger.info("🎬 [A3] Sending pre-roll chunk: \(preRollData.count) bytes", category: .audio)
+                handler(preRollData)
+                // Re-acquire lock for the rest of the function
+                lock.lock()
+            }
+
+            // Clear pre-roll buffers after processing
+            _preRollBuffers.removeAll()
         }
-        _preRollBuffers.removeAll()
+
         _audioFile = audioFile
         _isRecording = true
+        _lastSentTime = Date()
         lock.unlock()
 
         if preRollCount > 0 {
@@ -376,10 +537,21 @@ fileprivate final class AudioState: @unchecked Sendable {
 
     /// Called from MainActor. Stops routing buffers to file.
     /// Buffers resume going to the pre-roll ring buffer.
+    /// NOTE: Does NOT clear accumulated data - call flushAccumulatedData() to get remaining data.
     func stopRecording() {
         lock.lock()
+        Logger.info("🎬 [STOP] isRecording=\(_isRecording), accumulated=\(_accumulatedData.count) bytes", category: .audio)
         _isRecording = false
         _audioFile = nil
+        // Don't clear handler or accumulated data here - let flushAccumulatedData() handle it
+        lock.unlock()
+    }
+
+    /// Clear streaming state after flushing
+    func clearStreamingState() {
+        lock.lock()
+        _streamingHandler = nil
+        _accumulatedData = Data()
         lock.unlock()
     }
 
@@ -387,9 +559,35 @@ fileprivate final class AudioState: @unchecked Sendable {
     func clear() {
         lock.lock()
         _preRollBuffers.removeAll()
+        _accumulatedData = Data()
         _isRecording = false
         _audioFile = nil
+        _streamingHandler = nil
         lock.unlock()
+    }
+
+    /// Convert AVAudioPCMBuffer to Data (16-bit PCM)
+    /// The converter outputs 16-bit PCM, so we use int16ChannelData directly
+    private func convertBufferToData(_ buffer: AVAudioPCMBuffer) -> Data? {
+        guard buffer.frameLength > 0 else {
+            Logger.debug("🎬 [CONVERT] frameLength is 0", category: .audio)
+            return nil
+        }
+
+        let frameLength = Int(buffer.frameLength)
+        let bytesPerSample = 2  // 16-bit = 2 bytes
+
+        Logger.debug("🎬 [CONVERT] frameLength=\(frameLength), format=\(buffer.format)", category: .audio)
+
+        // The converter outputs 16-bit interleaved PCM
+        if let channelData = buffer.int16ChannelData {
+            let totalBytes = frameLength * bytesPerSample
+            Logger.debug("🎬 [CONVERT] Success: \(totalBytes) bytes", category: .audio)
+            return Data(bytes: channelData[0], count: totalBytes)
+        }
+
+        Logger.debug("🎬 [CONVERT] Failed: no int16ChannelData", category: .audio)
+        return nil
     }
 }
 

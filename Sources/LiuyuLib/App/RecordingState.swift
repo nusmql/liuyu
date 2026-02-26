@@ -55,7 +55,7 @@ public final class RecordingState: ObservableObject {
     // MARK: - Configuration
 
     public struct Configuration {
-        var debounceDuration: TimeInterval = 0.5
+        var debounceDuration: TimeInterval = 0.5  // 0.5s debounce to prevent accidental triggers
         var minimumRecordingDuration: TimeInterval = 0.3
         var silenceTimeout: TimeInterval = 5.0
         var audioActivityThreshold: Float = 0.25
@@ -126,6 +126,7 @@ public final class RecordingState: ObservableObject {
 
     /// Called when hotkey is released
     public func keyUp() {
+        Logger.info("🎬 [KEYUP] Received keyUp, current phase: \(phase)", category: .app)
         switch phase {
         case .debouncing:
             // Released before debounce - treat as click, cancel
@@ -136,11 +137,12 @@ public final class RecordingState: ObservableObject {
         case .recording:
             // Normal recording stop
             let duration = Date().timeIntervalSince(recordingStartTime ?? Date())
+            Logger.info("🎬 [KEYUP] In recording phase, duration: \(duration)s", category: .app)
             if duration < configuration.minimumRecordingDuration {
                 Logger.info("Recording too short (\(duration)s), canceling", category: .app)
                 transition(to: .idle)
             } else {
-                stopRecording()
+                stopRecording(caller: "keyUp.recording")
             }
 
         case .processing:
@@ -148,6 +150,7 @@ public final class RecordingState: ObservableObject {
             Logger.debug("Ignoring keyUp during processing", category: .app)
 
         default:
+            Logger.debug("KeyUp in phase: \(phase), ignoring", category: .app)
             break
         }
     }
@@ -170,8 +173,8 @@ public final class RecordingState: ObservableObject {
     // MARK: - State Transitions
 
     /// Internal method to force transition to a specific state (use with caution)
-    public func transition(to newPhase: RecordingPhase) {
-        Logger.debug("State transition: \(phase) → \(newPhase)", category: .app)
+    public func transition(to newPhase: RecordingPhase, caller: String = #function, line: Int = #line) {
+        Logger.debug("🎬 [TRANSITION] \(phase) → \(newPhase) (from: \(caller):\(line))", category: .app)
 
         // Exit current phase
         switch phase {
@@ -206,10 +209,15 @@ public final class RecordingState: ObservableObject {
 
     private func startDebounceTimer() {
         debounceTimer?.invalidate()
+        Logger.info("🎬 [DEBOUNCE] Starting debounce timer (\(configuration.debounceDuration)s)", category: .app)
         debounceTimer = Timer.scheduledTimer(withTimeInterval: configuration.debounceDuration, repeats: false) { [weak self] _ in
             Task { @MainActor in
-                guard let self = self, self.phase == .debouncing else { return }
-                self.transition(to: .recording)
+                guard let self = self, self.phase == .debouncing else {
+                    Logger.debug("Debounce timer fired but phase is not debouncing, skipping", category: .app)
+                    return
+                }
+                Logger.info("🎬 [DEBOUNCE] Timer fired, transitioning to recording", category: .app)
+                self.transition(to: .recording, caller: "debounce-timer")
             }
         }
     }
@@ -231,17 +239,26 @@ public final class RecordingState: ObservableObject {
     private func checkSilenceTimeout() {
         guard phase == .recording,
               let lastActivity = lastAudioActivity,
-              configuration.silenceTimeout > 0 else { return }
+              configuration.silenceTimeout > 0 else {
+            if phase == .recording {
+                Logger.debug("🎬 [SILENCE] Check skipped - lastActivity: \(lastAudioActivity != nil), timeout: \(configuration.silenceTimeout)", category: .audio)
+            }
+            return
+        }
 
         let silenceDuration = Date().timeIntervalSince(lastActivity)
         if silenceDuration >= configuration.silenceTimeout {
-            Logger.info("Silence timeout after \(String(format: "%.1f", silenceDuration))s", category: .audio)
-            stopRecording()
+            Logger.info("🎬 [SILENCE] Silence timeout after \(String(format: "%.1f", silenceDuration))s", category: .audio)
+            stopRecording(caller: "checkSilenceTimeout")
         }
     }
 
-    private func stopRecording() {
-        guard phase == .recording else { return }
+    private func stopRecording(caller: String = #function, file: String = #file, line: Int = #line) {
+        guard phase == .recording else {
+            Logger.debug("stopRecording called from \(caller):\(line) but phase is \(phase), skipping", category: .app)
+            return
+        }
+        Logger.info("🎬 [STOP] stopRecording called from \(caller):\(line)", category: .app)
         transition(to: .processing)
         // Actual stop logic will be handled by RecordingController
     }

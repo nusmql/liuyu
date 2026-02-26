@@ -79,7 +79,7 @@ final class DashScopeWebSocketTests: XCTestCase {
             XCTFail("Parameters should exist")
             return
         }
-        XCTAssertEqual(parameters["format"] as? String, "wav")
+        XCTAssertEqual(parameters["format"] as? String, "pcm")
         XCTAssertEqual(parameters["sample_rate"] as? Int, 16000)
     }
 
@@ -190,7 +190,12 @@ final class DashScopeWebSocketTests: XCTestCase {
         """
 
         let result = adapter.parseMessage(message)
-        XCTAssertNil(result) // task-finished doesn't produce a transcription result
+        // task-finished returns empty final result to signal completion
+        if case .final(let text) = result {
+            XCTAssertEqual(text, "")
+        } else {
+            XCTFail("Expected .final(\"\") for task-finished event")
+        }
     }
 
     /// Test parsing task-failed event

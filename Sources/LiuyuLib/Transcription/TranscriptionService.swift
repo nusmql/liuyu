@@ -25,6 +25,51 @@ public enum TranscriptionError: Error, LocalizedError, Sendable {
     }
 }
 
+/// Streaming transcription session for real-time audio
+/// Used by WebSocket-based strategies to receive audio chunks as they arrive
+@MainActor
+public final class StreamingTranscriptionSession: Sendable {
+    private let strategy: TranscriptionStrategy
+    private let config: TranscriptionConfig
+    private var isConnected = false
+
+    init(strategy: TranscriptionStrategy, config: TranscriptionConfig) {
+        self.strategy = strategy
+        self.config = config
+    }
+
+    /// Connect to the transcription service
+    public func connect() async throws {
+        guard !isConnected else { return }
+        try await strategy.connect(config: config)
+        isConnected = true
+    }
+
+    /// Send an audio chunk for real-time transcription
+    /// - Parameters:
+    ///   - data: Audio chunk (typically ~300ms of 16kHz 16-bit PCM)
+    ///   - isFinal: Whether this is the final chunk (end of recording)
+    public func sendAudioChunk(_ data: Data, isFinal: Bool) async throws {
+        // Note: isConnected is set after connect() completes, but WebSocket-based strategies
+        // buffer data internally until task-started is received, so we allow sending even
+        // if not fully "connected" yet
+        try await strategy.sendAudio(data, isFinal: isFinal)
+    }
+
+    /// Receive transcription results as a stream
+    /// For WebSocket: yields partial results during streaming, final result at end
+    /// For REST: yields final result only
+    public func receiveResults() -> AsyncStream<TranscriptionResult> {
+        strategy.receiveResults()
+    }
+
+    /// Disconnect and cleanup
+    public func disconnect() async {
+        await strategy.disconnect()
+        isConnected = false
+    }
+}
+
 /// Unified transcription service that automatically selects the appropriate strategy
 /// based on the provider and API format. Supports both REST APIs and WebSocket streaming.
 public final class TranscriptionService: Sendable {
@@ -35,6 +80,7 @@ public final class TranscriptionService: Sendable {
     public let apiFormat: ApiFormat
 
     private let strategy: TranscriptionStrategy
+    private let provider: ProviderType
 
     /// Creates a transcription service with the specified configuration
     /// Automatically selects the appropriate strategy (REST or WebSocket) based on apiFormat
@@ -63,6 +109,7 @@ public final class TranscriptionService: Sendable {
         } else {
             provider = .openai
         }
+        self.provider = provider
 
         // Create the appropriate strategy based on provider, model, and format
         self.strategy = TranscriptionStrategyFactory.createStrategy(
@@ -148,5 +195,26 @@ public final class TranscriptionService: Sendable {
 
         // Return the result stream directly
         return strategy.receiveResults()
+    }
+
+    /// Create a streaming transcription session for real-time audio
+    /// This allows sending audio chunks as they arrive from the microphone
+    /// - Returns: A StreamingTranscriptionSession for managing the connection
+    @MainActor
+    public func createStreamingSession() -> StreamingTranscriptionSession {
+        let config = TranscriptionConfig(
+            apiKey: apiKey,
+            endpoint: endpoint,
+            model: model,
+            language: language,
+            timeout: 30
+        )
+
+        return StreamingTranscriptionSession(strategy: strategy, config: config)
+    }
+
+    /// Whether this service supports real-time streaming
+    public var supportsStreaming: Bool {
+        strategy.supportsStreaming
     }
 }

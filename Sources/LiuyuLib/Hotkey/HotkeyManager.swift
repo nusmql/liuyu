@@ -229,16 +229,22 @@ public class HotkeyManager {
 
         let allMatch = modifierMatch && fnMatch
 
+        Logger.debug("Flags changed: allMatch=\(allMatch), isKeyDown=\(isKeyDown), isRecording=\(isRecording), flags=\(flags.rawValue)", category: .hotkey)
+
         if allMatch && !isKeyDown {
             // Prevent keyDown during recording, but allow keyUp
             guard !isRecording else {
+                Logger.debug("Ignoring keyDown during recording", category: .hotkey)
                 return Unmanaged.passUnretained(event)
             }
             isKeyDown = true
+            Logger.debug("Sending keyDown from flagsChanged", category: .hotkey)
             events.send(.keyDown)
             return nil
         } else if !allMatch && isKeyDown {
-            // Always allow keyUp, even during recording
+            // KEYUP: Always process keyUp, even during recording
+            // This ensures recording stops when user releases the shortcut
+            Logger.debug("Sending keyUp from flagsChanged", category: .hotkey)
             isKeyDown = false
             events.send(.keyUp)
             return nil
@@ -248,8 +254,9 @@ public class HotkeyManager {
     }
 
     private func handleKeyEvent(_ event: CGEvent) -> Unmanaged<CGEvent>? {
-        // Don't process events during recording
-        guard !isRecording else {
+        // Don't process new keyDown during recording, but always allow keyUp
+        // This ensures the recording stops when user releases the key
+        if isRecording && event.type == .keyDown {
             return Unmanaged.passUnretained(event)
         }
 

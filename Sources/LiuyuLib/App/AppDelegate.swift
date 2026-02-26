@@ -19,6 +19,16 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
     private let providerStore = ProviderConfigStore()
 
+    // Streaming transcription support
+    private var streamingSession: StreamingTranscriptionSession?
+    private var streamingTask: Task<Void, Never>?
+    private var accumulatedText = ""
+
+    /// Background WebSocket connection for zero-latency recording
+    private var backgroundSession: StreamingTranscriptionSession?
+    private var backgroundSessionTask: Task<Void, Never>?
+    private var lastUsedSession: Date?
+
     /// Recording state manager
     private let recordingState = RecordingState.shared
 
@@ -31,6 +41,10 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         AppTheme.applyFromDefaults()
         providerStore.migrateIfNeeded()
         RecordingController.cleanupOrphanedFiles()
+
+        // Pre-warm WebSocket connection if using streaming model
+        prewarmWebSocketConnection()
+
         setupMainMenu()
         setupStatusItem()
         panelController.setup()
@@ -39,6 +53,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         applyHotkeyShortcut()
         setupHotkeyRefresh()
         startHotkeyManager()
+        setupSettingsChangeListener()
 
         // Centralize activation policy: only go accessory when ALL windows are closed
         let updatePolicy: () -> Void = { [weak self] in
@@ -251,7 +266,8 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
         switch phase {
         case .debouncing:
-            // Just waiting, no UI yet
+            // Background WebSocket connection is already maintained
+            // No need to prepare anything here
             break
 
         case .recording:
@@ -329,18 +345,171 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             .store(in: &cancellables)
     }
 
+    /// Listen for settings changes to re-warm WebSocket when model changes
+    private func setupSettingsChangeListener() {
+        NotificationCenter.default
+            .publisher(for: Notification.Name("sttModelChanged"))
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                Logger.info("STT model changed, re-warming WebSocket...", category: .settings)
+                Task {
+                    // Close existing connection
+                    await self?.cleanupStreaming()
+                    // Start new pre-warm
+                    self?.prewarmWebSocketConnection()
+                }
+            }
+            .store(in: &cancellables)
+    }
+
+    // MARK: - WebSocket Pre-warming
+
+    /// Pre-warm WebSocket connection for streaming models
+    /// Establishes persistent connection at app startup and maintains it
+    private func prewarmWebSocketConnection() {
+        // Cancel any existing background connection task
+        backgroundSessionTask?.cancel()
+
+        backgroundSessionTask = Task { @MainActor in
+            // Wait a moment for app to fully initialize
+            try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
+
+            guard !Task.isCancelled else { return }
+
+            await establishBackgroundConnection()
+        }
+    }
+
+    /// Establish and maintain background WebSocket connection
+    private func establishBackgroundConnection() async {
+        // Get current STT config
+        let feature = providerStore.loadFeatureConfig()
+        guard let stt = feature.sttPrimary,
+              let params = providerStore.resolveSTT(stt),
+              params.apiFormat == .alibabaRealtime || params.apiFormat == .tencentRealtime else {
+            Logger.debug("No WebSocket STT configured, skipping background connection", category: .stt)
+            return
+        }
+
+        Logger.info("🌡️ Establishing background WebSocket connection for \(params.model)...", category: .stt)
+
+        // Create new session
+        let language = UserDefaults.standard.string(forKey: "language") ?? "auto"
+        let service = TranscriptionService(
+            apiKey: params.apiKey,
+            endpoint: params.endpoint,
+            model: params.model,
+            language: language == "auto" ? nil : language,
+            apiFormat: params.apiFormat
+        )
+
+        let session = service.createStreamingSession()
+        self.backgroundSession = session
+
+        do {
+            try await session.connect()
+            Logger.info("🌡️ Background WebSocket connected and ready", category: .stt)
+            lastUsedSession = Date()
+
+            // Start heartbeat to keep connection alive
+            await maintainConnection(session: session)
+        } catch {
+            Logger.error("🌡️ Background WebSocket connection failed: \(error)", category: .stt)
+
+            // Retry after delay if not cancelled
+            if !Task.isCancelled {
+                Logger.info("🌡️ Will retry connection in 5 seconds...", category: .stt)
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                if !Task.isCancelled {
+                    await establishBackgroundConnection()
+                }
+            }
+        }
+    }
+
+    /// Maintain connection with periodic checks and reconnection
+    private func maintainConnection(session: StreamingTranscriptionSession) async {
+        // Check connection every 10 seconds
+        while !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: 10_000_000_000) // 10 seconds
+
+            guard !Task.isCancelled else { break }
+
+            // If session hasn't been used for 60 seconds, disconnect to save resources
+            // It will be reconnected when needed
+            if let lastUsed = lastUsedSession,
+               Date().timeIntervalSince(lastUsed) > 60 {
+                Logger.info("🌡️ Background connection idle for 60s, disconnecting", category: .stt)
+                await session.disconnect()
+                backgroundSession = nil
+                break
+            }
+        }
+    }
+
+    /// Get background session for recording (if available and fresh)
+    /// Returns nil if no valid background session exists
+    private func getBackgroundSession() -> StreamingTranscriptionSession? {
+        guard let session = backgroundSession else { return nil }
+
+        // Check if session is still fresh (used within last 55 seconds)
+        guard let lastUsed = lastUsedSession,
+              Date().timeIntervalSince(lastUsed) < 55 else {
+            Logger.info("🌡️ Background session too old, will create new connection", category: .stt)
+            return nil
+        }
+
+        Logger.info("🌡️ Using background WebSocket session (zero latency)", category: .stt)
+        return session
+    }
+
+    /// Mark background session as used (call when starting recording)
+    private func markSessionUsed() {
+        lastUsedSession = Date()
+    }
+
+    /// Reconnect background session after settings change
+    func reconnectBackgroundSession() {
+        Logger.info("🌡️ Reconnecting background session due to settings change", category: .stt)
+
+        // Disconnect existing
+        Task {
+            if let session = backgroundSession {
+                await session.disconnect()
+                backgroundSession = nil
+            }
+
+            // Establish new connection
+            await establishBackgroundConnection()
+        }
+    }
+
     // MARK: - Recording Flow (using RecordingState)
 
     /// Called when RecordingState enters .recording phase
     private func startRecordingUI() {
-        Logger.debug("Starting recording UI", category: .app)
+        Logger.info("🎬 [T0] startRecordingUI called", category: .app)
         previousApp = NSWorkspace.shared.frontmostApplication
 
         panelController.viewModel.showRecording()
         panelController.show()
         Logger.debug("Panel shown for recording", category: .ui)
 
+        // Check if we should use streaming transcription
+        let feature = providerStore.loadFeatureConfig()
+        if let stt = feature.sttPrimary,
+           let params = providerStore.resolveSTT(stt),
+           params.apiFormat == .alibabaRealtime || params.apiFormat == .tencentRealtime {
+            Logger.info("🎬 Using streaming mode for \(params.model)", category: .app)
+            Task {
+                await startStreamingRecording(params: params)
+            }
+            return
+        }
+
+        // Use traditional file-based recording
         do {
+            Logger.info("🎬 Using file-based recording", category: .app)
             try recordingController.start()
 
             // Forward audio levels to RecordingState
@@ -358,13 +527,171 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Start streaming recording with real-time transcription
+    /// Uses pre-connected session if available, otherwise creates new connection
+    @MainActor
+    private func startStreamingRecording(params: (apiKey: String, endpoint: String, model: String, apiFormat: ApiFormat)) async {
+        Logger.info("🎬 [T1] startStreamingRecording called - model: \(params.model)", category: .app)
+
+        do {
+            // STEP 1: Start recording IMMEDIATELY to capture all audio
+            // Background WebSocket connection is already ready
+            Logger.info("🎬 [T2] Starting audio recording...", category: .audio)
+            try recordingController.startStreaming()
+            Logger.info("🎬 [T3] Audio recording started", category: .audio)
+
+            // Forward audio levels to RecordingState
+            recordingController.$audioLevel
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] level in
+                    self?.recordingState.updateAudioActivity(level: level)
+                    self?.panelController.viewModel.updateAudioLevel(level)
+                }
+                .store(in: &cancellables)
+
+            // STEP 3: Use background session (zero latency) or create new connection
+            if let background = getBackgroundSession() {
+                Logger.info("🎬 [T4] Using background WebSocket session (zero latency)", category: .stt)
+                streamingSession = background
+                backgroundSession = nil // Take ownership
+                markSessionUsed()
+
+                // Re-establish background connection for next time
+                prewarmWebSocketConnection()
+            } else {
+                Logger.info("🎬 [T4] No background session, creating new WebSocket connection...", category: .stt)
+                let language = UserDefaults.standard.string(forKey: "language") ?? "auto"
+                let service = TranscriptionService(
+                    apiKey: params.apiKey,
+                    endpoint: params.endpoint,
+                    model: params.model,
+                    language: language == "auto" ? nil : language,
+                    apiFormat: params.apiFormat
+                )
+                streamingSession = service.createStreamingSession()
+                do {
+                    try await streamingSession?.connect()
+                    Logger.info("🎬 [T5] WebSocket connected", category: .stt)
+                } catch {
+                    Logger.error("🎬 [T5] WebSocket connection failed: \(error)", category: .stt)
+                }
+            }
+
+            // STEP 3: Set up streaming handler (sends buffered audio if any)
+            recordingController.setStreamingHandler { [weak self] chunk in
+                Task { [weak self] in
+                    do {
+                        try await self?.streamingSession?.sendAudioChunk(chunk, isFinal: false)
+                    } catch {
+                        Logger.error("Failed to send audio chunk: \(error)", category: .stt)
+                    }
+                }
+            }
+            Logger.info("🎬 [T6] Streaming handler set up", category: .audio)
+
+            // STEP 4: Start listening for transcription results
+            startStreamingResultsListener()
+
+            Logger.debug("Recording started (streaming)", category: .app)
+        } catch {
+            Logger.error("Failed to start streaming recording: \(error)", category: .app)
+            panelController.hide()
+            recordingState.cancel()
+            await cleanupStreaming()
+        }
+    }
+
+    /// Listen for streaming transcription results
+    private func startStreamingResultsListener() {
+        if let oldTask = streamingTask {
+            Logger.info("🎬 [T7-SETUP] Cancelling previous streaming task", category: .stt)
+            oldTask.cancel()
+        }
+        streamingTask = Task { [weak self] in
+            guard let self = self, let session = self.streamingSession else { return }
+            Logger.info("🎬 [T7] Started listening for transcription results", category: .stt)
+
+            defer {
+                let cancelled = Task.isCancelled
+                Logger.info("🎬 [T7-DEFER] Result stream ending (cancelled: \(cancelled))", category: .stt)
+                // Ensure cleanup if stream ends unexpectedly
+                Task { [weak self] in
+                    guard let self else { return }
+                    // If still in processing state, something went wrong
+                    if case .processing = self.recordingState.phase {
+                        Logger.warning("Stream ended without final result, forcing state reset", category: .stt)
+                        await MainActor.run {
+                            self.recordingState.transition(to: .completed(self.accumulatedText), caller: "defer-block")
+                        }
+                    }
+                    await self.cleanupStreaming()
+                }
+            }
+
+            for await result in session.receiveResults() {
+                guard !Task.isCancelled else { break }
+
+                switch result {
+                case .partial(let text):
+                    Logger.info("🎬 [T8] Partial result: \"\(text)\"", category: .stt)
+                    // Update accumulated text for partial results and show in UI
+                    // Note: Stay in .recording state while user is still holding the key
+                    // Transition to .processing happens on keyUp or silence timeout
+                    await MainActor.run {
+                        self.accumulatedText = text
+                    }
+
+                case .final(let text):
+                    Logger.info("🎬 [T9] Final result received: \"\(text)\" (isEmpty: \(text.isEmpty))", category: .stt)
+                    await MainActor.run {
+                        self.accumulatedText = text
+                        // Transition to completed state (use accumulated text if final is empty)
+                        let resultText = text.isEmpty ? self.accumulatedText : text
+                        Logger.info("🎬 [T9-COMPLETING] Transitioning to completed with: \"\(resultText)\"", category: .stt)
+                        self.recordingState.transition(to: .completed(resultText), caller: "final-result")
+                    }
+                    await self.cleanupStreaming()
+                    return
+
+                case .error(let error):
+                    Logger.error("🎬 [T9-ERROR] Streaming error: \(error)", category: .stt)
+                    await MainActor.run {
+                        self.recordingState.transition(to: .error(error.localizedDescription), caller: "stream-error")
+                    }
+                    await self.cleanupStreaming()
+                    return
+                }
+            }
+
+            Logger.info("🎬 [T7-END] Result stream ended (cancelled: \(Task.isCancelled))", category: .stt)
+        }
+    }
+
+    /// Cleanup streaming resources
+    private func cleanupStreaming() async {
+        streamingTask?.cancel()
+        streamingTask = nil
+        recordingController.setStreamingHandler(nil)
+        await streamingSession?.disconnect()
+        streamingSession = nil
+    }
+
     /// Minimum time to show processing UI (in seconds)
     private static let minProcessingDisplayTime: TimeInterval = 1.5
 
     /// Called when RecordingState enters .processing phase
     private func stopRecordingUI() {
-        Logger.debug("Stopping recording UI", category: .app)
+        Logger.info("🎬 [T10] stopRecordingUI called", category: .app)
 
+        // Check if we're in streaming mode
+        if streamingSession != nil {
+            Task {
+                await finishStreamingRecording()
+            }
+            return
+        }
+
+        // File-based recording stop
         guard let audioURL = recordingController.stop() else {
             Logger.warning("No audio recorded", category: .audio)
             panelController.hide()
@@ -394,32 +721,76 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
                 }
 
                 await MainActor.run {
-                    recordingState.transition(to: .completed(text))
+                    recordingState.transition(to: .completed(text), caller: "transcribe-success")
                 }
             } catch {
                 Logger.error("Error during transcription: \(error)", category: .app)
                 await MainActor.run {
-                    recordingState.transition(to: .completed("Transcription failed: \(error.localizedDescription)"))
+                    recordingState.transition(to: .completed("Transcription failed: \(error.localizedDescription)"), caller: "transcribe-failure")
                 }
             }
         }
     }
 
+    /// Finish streaming recording
+    @MainActor
+    private func finishStreamingRecording() async {
+        Logger.info("🎬 [T11] finishStreamingRecording started", category: .app)
+
+        // Stop recording first (sets isRecording = false but keeps accumulated data)
+        _ = recordingController.stop()
+        Logger.info("🎬 [T12] Audio recording stopped", category: .audio)
+
+        // Flush any remaining accumulated audio data
+        // This returns the data instead of calling the handler to ensure proper ordering
+        let flushedData = recordingController.flushStreamingData()
+
+        // Now clear streaming state (handler and accumulated data)
+        recordingController.clearStreamingState()
+
+        // Send any flushed data BEFORE sending finish-task
+        // This ensures proper ordering: audio data first, then finish signal
+        do {
+            if let data = flushedData, !data.isEmpty {
+                Logger.info("🎬 [T13] Sending flushed audio data: \(data.count) bytes...", category: .stt)
+                try await streamingSession?.sendAudioChunk(data, isFinal: false)
+                Logger.info("🎬 [T13b] Flushed data sent", category: .stt)
+            }
+
+            // Now send final chunk to indicate end of stream
+            Logger.info("🎬 [T14] Sending final audio chunk (finish-task)...", category: .stt)
+            try await streamingSession?.sendAudioChunk(Data(), isFinal: true)
+            Logger.info("🎬 [T15] Final chunk sent, waiting for transcription...", category: .stt)
+        } catch {
+            Logger.error("Failed to send final chunk: \(error)", category: .stt)
+            recordingState.transition(to: .error(error.localizedDescription), caller: "finish-streaming-error")
+            await cleanupStreaming()
+        }
+
+        // Results will be handled by streamingTask listener
+    }
+
     /// Called when RecordingState enters .completed phase
     /// Uses TranscriptionPresenter actor to ensure thread-safe, ordered presentation
     private func showTranscriptionResult(_ text: String) {
-        Logger.info("Showing transcription result", category: .stt)
+        Logger.info("🎬 [RESULT] showTranscriptionResult called with text: '\(text.prefix(50))...' (length: \(text.count))", category: .stt)
 
         // Hide panel immediately
         panelController.hide(immediately: true)
+        Logger.debug("🎬 [RESULT] Panel hidden", category: .ui)
 
         // Reset state to idle so next shortcut works
-        recordingState.transition(to: .idle)
+        recordingState.transition(to: .idle, caller: "showTranscriptionResult")
 
         // Use Actor to ensure serial presentation of results
+        Logger.debug("🎬 [RESULT] Calling TranscriptionPresenter.present", category: .ui)
         Task {
             await TranscriptionPresenter.shared.present(text) { [weak self] resultText in
-                guard let self else { return }
+                guard let self else {
+                    Logger.error("🎬 [RESULT] Self was nil in presenter closure", category: .ui)
+                    return
+                }
+                Logger.info("🎬 [RESULT] Presenting result to UI: '\(resultText.prefix(50))...'", category: .ui)
                 await self.presentTranscriptionResult(resultText)
                 await MainActor.run {
                     self.cleanupCurrentAudio()
@@ -432,14 +803,17 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     /// Must be called from MainActor since it accesses UI.
     @MainActor
     private func presentTranscriptionResult(_ text: String) async {
+        Logger.info("🎬 [PRESENT] presentTranscriptionResult called, text length: \(text.count), isWindowVisible: \(editController.isWindowVisible)", category: .ui)
         // Check if Edit window is already open
         if editController.isWindowVisible {
-            Logger.info("Edit window visible, clearing and showing new result", category: .ui)
+            Logger.info("🎬 [PRESENT] Edit window visible, clearing and showing new result", category: .ui)
             editController.clear()
             editController.showWithText(text) { _ in }
+            Logger.info("🎬 [PRESENT] Edit window updated with new text", category: .ui)
         } else {
-            Logger.info("Opening Edit window", category: .ui)
+            Logger.info("🎬 [PRESENT] Opening Edit window", category: .ui)
             editController.showWithText(text) { _ in }
+            Logger.info("🎬 [PRESENT] Edit window shown, isWindowVisible now: \(editController.isWindowVisible)", category: .ui)
         }
     }
 
@@ -449,7 +823,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         // Ensure panel is hidden immediately
         panelController.hide(immediately: true)
         // Reset state to idle so next shortcut works
-        recordingState.transition(to: .idle)
+        recordingState.transition(to: .idle, caller: "showError")
         // Clean up any remaining audio file
         cleanupCurrentAudio()
         // Could show an alert here

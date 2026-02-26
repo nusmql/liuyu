@@ -54,7 +54,7 @@ private final class WebSocketDelegate: NSObject, URLSessionWebSocketDelegate, @u
     var onError: ((Error) -> Void)?
 
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didOpenWithProtocol protocol: String?) {
-        Logger.info("WebSocket didOpenWithProtocol: \(`protocol` ?? "none")", category: .stt)
+        Logger.info("🎬 [WS-CONN] WebSocket didOpenWithProtocol: \(`protocol` ?? "none")", category: .stt)
         onOpen?()
     }
 
@@ -127,15 +127,16 @@ public actor WebSocketManager {
 
         // Set up delegate callbacks
         delegate.onOpen = { [weak self] in
+            Logger.info("🎬 [WS-DELEGATE] Connection opened", category: .stt)
             Task { [weak self] in
                 await self?.setConnected(true)
             }
         }
-        delegate.onClose = { [weak self] code, reason in
-            Logger.warning("WebSocket closed with code: \(code)", category: .stt)
+        delegate.onClose = { code, reason in
+            Logger.warning("🎬 [WS-DELEGATE] WebSocket closed with code: \(code)", category: .stt)
         }
-        delegate.onError = { [weak self] error in
-            Logger.error("WebSocket delegate error: \(error)", category: .stt)
+        delegate.onError = { error in
+            Logger.error("🎬 [WS-DELEGATE] WebSocket delegate error: \(error)", category: .stt)
         }
 
         // Set up message handler
@@ -239,16 +240,13 @@ public actor WebSocketManager {
     }
 
     private func handleTextMessage(_ text: String) {
-        Logger.debug("WebSocket received text: \(text.prefix(200))", category: .stt)
-
-        // Check for connection acknowledgment
-        // Support various provider acknowledgment messages:
-        // - Generic: "connected", "ready"
-        // - DashScope: "task-started"
-        if text.contains("connected") || text.contains("ready") || text.contains("task-started") {
-            Logger.info("WebSocket connection acknowledged", category: .stt)
+        // Check for connection acknowledgment first
+        if text.contains("task-started") {
+            Logger.info("🎬 [WS-T0] task-started received", category: .stt)
             isConnected = true
         }
+
+        Logger.debug("WebSocket received text: \(text.prefix(200))", category: .stt)
 
         // Parse the message using the registered handler
         if let handler = messageHandler, let result = handler(text) {
