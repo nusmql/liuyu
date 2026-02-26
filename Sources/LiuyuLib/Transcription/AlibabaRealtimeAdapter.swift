@@ -203,6 +203,49 @@ public actor AlibabaRealtimeAdapter: WebSocketStrategy {
 
     private func setupResultHandling(continuation: AsyncStream<TranscriptionResult>.Continuation) async {
         await webSocketManager.setContinuation(continuation)
+        // Set message handler to parse incoming WebSocket messages
+        await webSocketManager.setMessageHandler { [weak self] text in
+            // Access the parseMessage method through a nonisolated context
+            AlibabaRealtimeAdapter.parseMessageStatic(text)
+        }
+    }
+
+    /// Static helper for message parsing to avoid actor isolation issues
+    private static func parseMessageStatic(_ message: String) -> TranscriptionResult? {
+        guard let data = message.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+
+        guard let header = json["header"] as? [String: Any],
+              let event = header["event"] as? String else {
+            return nil
+        }
+
+        switch event {
+        case "task-started":
+            return nil
+
+        case "result-generated":
+            guard let payload = json["payload"] as? [String: Any],
+                  let output = payload["output"] as? [String: Any],
+                  let sentence = output["sentence"] as? [String: Any],
+                  let text = sentence["text"] as? String else {
+                return nil
+            }
+            let isFinal = sentence["end_time"] != nil
+            return isFinal ? .final(text) : .partial(text)
+
+        case "task-finished":
+            return nil
+
+        case "task-failed":
+            let errorMessage = header["error_message"] as? String ?? "Unknown error"
+            return .error(TranscriptionError.serverError(500, errorMessage))
+
+        default:
+            return nil
+        }
     }
 
     public func disconnect() async {

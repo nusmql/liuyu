@@ -74,6 +74,9 @@ private final class WebSocketDelegate: NSObject, URLSessionWebSocketDelegate, @u
     }
 }
 
+/// Message handler type for parsing WebSocket messages
+public typealias MessageHandler = @Sendable (String) -> TranscriptionResult?
+
 /// Manages WebSocket connection for transcription strategies
 public actor WebSocketManager {
     public private(set) var webSocketTask: URLSessionWebSocketTask?
@@ -84,6 +87,7 @@ public actor WebSocketManager {
     private let buildHeartbeatMessage: @Sendable () -> [String: Any]?
     private let heartbeatInterval: TimeInterval
     private var webSocketDelegate: WebSocketDelegate?
+    private var messageHandler: MessageHandler?
 
     public init(
         heartbeatInterval: TimeInterval = 30,
@@ -91,6 +95,11 @@ public actor WebSocketManager {
     ) {
         self.heartbeatInterval = heartbeatInterval
         self.buildHeartbeatMessage = buildHeartbeatMessage
+    }
+
+    /// Set the message handler for parsing incoming WebSocket messages
+    public func setMessageHandler(_ handler: MessageHandler?) {
+        self.messageHandler = handler
     }
 
     public func connect(url: URL, headers: [String: String] = [:]) async throws {
@@ -239,7 +248,12 @@ public actor WebSocketManager {
         if text.contains("connected") || text.contains("ready") || text.contains("task-started") {
             Logger.info("WebSocket connection acknowledged", category: .stt)
             isConnected = true
-            return
+        }
+
+        // Parse the message using the registered handler
+        if let handler = messageHandler, let result = handler(text) {
+            Logger.debug("Parsed result: \(result)", category: .stt)
+            yieldResult(result)
         }
     }
 
