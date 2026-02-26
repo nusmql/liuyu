@@ -66,6 +66,8 @@ public actor WebSocketManager {
     }
 
     public func connect(url: URL, headers: [String: String] = [:]) async throws {
+        Logger.info("WebSocket connecting to: \(url.absoluteString)", category: .stt)
+
         // Create WebSocket task with custom headers
         let session = URLSession(configuration: .default)
 
@@ -77,6 +79,7 @@ public actor WebSocketManager {
             for (key, value) in headers {
                 request.setValue(value, forHTTPHeaderField: key)
             }
+            Logger.debug("WebSocket headers: \(headers.keys.joined(separator: ", "))", category: .stt)
             webSocketTask = session.webSocketTask(with: request)
         }
 
@@ -86,6 +89,7 @@ public actor WebSocketManager {
         // Connect
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             webSocketTask?.resume()
+            Logger.debug("WebSocket task resumed", category: .stt)
 
             // Wait for connection to establish
             Task { [weak self] in
@@ -93,8 +97,10 @@ public actor WebSocketManager {
                     continuation.resume(throwing: TranscriptionError.networkError("WebSocket connection timeout"))
                     return
                 }
-                try? await Task.sleep(nanoseconds: 1_000_000_000) // 1 second
-                if await self.isConnected {
+                try? await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds (increased from 1)
+                let connected = await self.isConnected
+                Logger.debug("WebSocket connection check: isConnected=\(connected)", category: .stt)
+                if connected {
                     continuation.resume()
                 } else {
                     continuation.resume(throwing: TranscriptionError.networkError("WebSocket connection timeout"))
@@ -168,11 +174,14 @@ public actor WebSocketManager {
     }
 
     private func handleTextMessage(_ text: String) {
+        Logger.debug("WebSocket received text: \(text.prefix(200))", category: .stt)
+
         // Check for connection acknowledgment
         // Support various provider acknowledgment messages:
         // - Generic: "connected", "ready"
         // - DashScope: "task-started"
         if text.contains("connected") || text.contains("ready") || text.contains("task-started") {
+            Logger.info("WebSocket connection acknowledged", category: .stt)
             isConnected = true
             return
         }

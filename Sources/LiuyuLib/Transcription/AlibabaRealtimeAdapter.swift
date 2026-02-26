@@ -136,17 +136,22 @@ public actor AlibabaRealtimeAdapter: WebSocketStrategy {
 
         // Generate task ID (32 characters, UUID without dashes)
         self.taskId = UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(32).description
+        Logger.info("Generated task ID: \(taskId)", category: .stt)
 
         // Build WebSocket URL and headers
         let url = try buildWebSocketURL(config: config)
         let headers = buildWebSocketHeaders(config: config)
 
         // Connect using manager with Bearer token headers
+        Logger.info("Connecting to DashScope WebSocket...", category: .stt)
         try await webSocketManager.connect(url: url, headers: headers)
+        Logger.info("WebSocket connected, sending run-task...", category: .stt)
 
         // Send run-task message
         if let setupMessage = buildSetupMessage(config: config) {
+            Logger.debug("Sending run-task: \(setupMessage)", category: .stt)
             try await webSocketManager.sendJSON(setupMessage)
+            Logger.info("Run-task sent, waiting for task-started...", category: .stt)
         }
     }
 
