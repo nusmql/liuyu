@@ -47,6 +47,33 @@ public extension WebSocketStrategy {
 
 // MARK: - WebSocket Manager
 
+/// Delegate to monitor WebSocket connection state
+private final class WebSocketDelegate: NSObject, URLSessionWebSocketDelegate, @unchecked Sendable {
+    var onOpen: (() -> Void)?
+    var onClose: ((URLSessionWebSocketTask.CloseCode, Data?) -> Void)?
+    var onError: ((Error) -> Void)?
+
+    func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didOpenWithProtocol protocol: String?) {
+        Logger.info("WebSocket didOpenWithProtocol: \(`protocol` ?? "none")", category: .stt)
+        onOpen?()
+    }
+
+    func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
+        Logger.info("WebSocket didCloseWith code: \(closeCode)", category: .stt)
+        if let reason = reason, let reasonString = String(data: reason, encoding: .utf8) {
+            Logger.info("WebSocket close reason: \(reasonString)", category: .stt)
+        }
+        onClose?(closeCode, reason)
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        if let error = error {
+            Logger.error("WebSocket didCompleteWithError: \(error)", category: .stt)
+            onError?(error)
+        }
+    }
+}
+
 /// Manages WebSocket connection for transcription strategies
 public actor WebSocketManager {
     public private(set) var webSocketTask: URLSessionWebSocketTask?
@@ -56,6 +83,7 @@ public actor WebSocketManager {
 
     private let buildHeartbeatMessage: @Sendable () -> [String: Any]?
     private let heartbeatInterval: TimeInterval
+    private var webSocketDelegate: WebSocketDelegate?
 
     public init(
         heartbeatInterval: TimeInterval = 30,
@@ -68,8 +96,13 @@ public actor WebSocketManager {
     public func connect(url: URL, headers: [String: String] = [:]) async throws {
         Logger.info("WebSocket connecting to: \(url.absoluteString)", category: .stt)
 
+        // Create delegate for connection monitoring
+        let delegate = WebSocketDelegate()
+        self.webSocketDelegate = delegate
+
         // Create WebSocket task with custom headers
-        let session = URLSession(configuration: .default)
+        // Use ephemeral session with delegate to monitor connection state
+        let session = URLSession(configuration: .ephemeral, delegate: delegate, delegateQueue: nil)
 
         if headers.isEmpty {
             webSocketTask = session.webSocketTask(with: url)
@@ -81,6 +114,19 @@ public actor WebSocketManager {
             }
             Logger.debug("WebSocket headers: \(headers.keys.joined(separator: ", "))", category: .stt)
             webSocketTask = session.webSocketTask(with: request)
+        }
+
+        // Set up delegate callbacks
+        delegate.onOpen = { [weak self] in
+            Task { [weak self] in
+                await self?.setConnected(true)
+            }
+        }
+        delegate.onClose = { [weak self] code, reason in
+            Logger.warning("WebSocket closed with code: \(code)", category: .stt)
+        }
+        delegate.onError = { [weak self] error in
+            Logger.error("WebSocket delegate error: \(error)", category: .stt)
         }
 
         // Set up message handler
@@ -97,7 +143,7 @@ public actor WebSocketManager {
                     continuation.resume(throwing: TranscriptionError.networkError("WebSocket connection timeout"))
                     return
                 }
-                try? await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds (increased from 1)
+                try? await Task.sleep(nanoseconds: 3_000_000_000) // 3 seconds
                 let connected = await self.isConnected
                 Logger.debug("WebSocket connection check: isConnected=\(connected)", category: .stt)
                 if connected {
@@ -107,6 +153,10 @@ public actor WebSocketManager {
                 }
             }
         }
+    }
+
+    private func setConnected(_ value: Bool) {
+        isConnected = value
     }
 
     public func sendJSON(_ object: [String: Any]) async throws {
@@ -169,6 +219,12 @@ public actor WebSocketManager {
 
         case .failure(let error):
             Logger.error("WebSocket error: \(error)", category: .stt)
+            // Check for specific error types
+            let nsError = error as NSError
+            Logger.error("Error domain: \(nsError.domain), code: \(nsError.code)", category: .stt)
+            if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? Error {
+                Logger.error("Underlying error: \(underlying)", category: .stt)
+            }
             resultContinuation?.yield(.error(TranscriptionError.networkError(error.localizedDescription)))
         }
     }
