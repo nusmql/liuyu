@@ -169,7 +169,10 @@ public actor WebSocketManager {
 
     private func handleTextMessage(_ text: String) {
         // Check for connection acknowledgment
-        if text.contains("connected") || text.contains("ready") {
+        // Support various provider acknowledgment messages:
+        // - Generic: "connected", "ready"
+        // - DashScope: "task-started"
+        if text.contains("connected") || text.contains("ready") || text.contains("task-started") {
             isConnected = true
             return
         }
