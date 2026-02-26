@@ -8,13 +8,9 @@ public actor AlibabaRealtimeAdapter: WebSocketStrategy {
 
     public let strategyId = "alibaba-realtime"
     private var config: TranscriptionConfig?
+    private var taskId: String = ""
     private var webSocketManager = WebSocketManager(
-        heartbeatInterval: 30, // Enable heartbeat for DashScope
-        buildHeartbeatMessage: {
-            return [
-                "type": "ping"
-            ]
-        }
+        heartbeatInterval: 0 // DashScope doesn't require heartbeat
     )
 
     public init() {}
@@ -39,55 +35,57 @@ public actor AlibabaRealtimeAdapter: WebSocketStrategy {
     /// Build HTTP headers with Bearer token authentication
     nonisolated public func buildWebSocketHeaders(config: TranscriptionConfig) -> [String: String] {
         return [
-            "Authorization": "Bearer \(config.apiKey)",
-            "Content-Type": "application/json"
+            "Authorization": "Bearer \(config.apiKey)" // Format: Bearer <api-key>
         ]
     }
 
-    /// Build Alibaba-specific setup message
+    /// Build run-task message to start recognition
     nonisolated public func buildSetupMessage(config: TranscriptionConfig) -> [String: Any]? {
+        // Generate 32-character task ID (UUID without dashes, truncated to 32 chars)
+        let taskId = UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(32).description
+
         return [
             "header": [
-                "message_id": UUID().uuidString,
-                "task_id": UUID().uuidString,
-                "namespace": "SpeechTranscriber",
-                "name": "StartTranscription"
+                "action": "run-task",
+                "task_id": taskId,
+                "streaming": "duplex"
             ],
             "payload": [
-                "format": "wav",
-                "sample_rate": 16000,
-                "enable_intermediate_result": true,
-                "enable_punctuation_prediction": true,
-                "enable_inverse_text_normalization": true,
-                "max_sentence_silence": 800
+                "task_group": "audio",
+                "task": "asr",
+                "function": "recognition",
+                "model": config.model.isEmpty ? "fun-asr-realtime" : config.model,
+                "parameters": [
+                    "sample_rate": 16000,
+                    "format": "wav"
+                ],
+                "input": [:]
             ]
         ]
     }
 
-    /// Build audio data message in Alibaba format
+    /// Audio is sent as binary chunks, not JSON messages
     nonisolated public func buildAudioMessage(_ data: Data, isFinal: Bool) -> [String: Any] {
-        var message: [String: Any] = [
-            "header": [
-                "message_id": UUID().uuidString,
-                "namespace": "SpeechTranscriber",
-                "name": "RunTranscription"
-            ],
-            "payload": [
-                "audio": data.base64EncodedString()
-            ]
-        ]
-
-        if isFinal {
-            message["payload"] = [
-                "audio": "",
-                "completed": true
-            ]
-        }
-
-        return message
+        // DashScope expects raw binary audio data, not base64 JSON
+        // This method is not used; we send Data directly via sendData
+        return [:]
     }
 
-    /// Parse Alibaba-specific response message
+    /// Build finish-task message
+    private func buildFinishTaskMessage() -> [String: Any] {
+        return [
+            "header": [
+                "action": "finish-task",
+                "task_id": taskId,
+                "streaming": "duplex"
+            ],
+            "payload": [
+                "input": [:]
+            ]
+        ]
+    }
+
+    /// Parse DashScope response message
     nonisolated public func parseMessage(_ message: String) -> TranscriptionResult? {
         guard let data = message.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -95,33 +93,33 @@ public actor AlibabaRealtimeAdapter: WebSocketStrategy {
         }
 
         guard let header = json["header"] as? [String: Any],
-              let name = header["name"] as? String else {
+              let event = header["event"] as? String else {
             return nil
         }
 
-        switch name {
-        case "TranscriptionResultChanged":
-            guard let payload = json["payload"] as? [String: Any],
-                  let text = payload["result"] as? String else {
-                return nil
-            }
-            return .partial(text)
-
-        case "SentenceEnd":
-            guard let payload = json["payload"] as? [String: Any],
-                  let text = payload["result"] as? String else {
-                return nil
-            }
-            return .final(text)
-
-        case "TranscriptionCompleted":
+        switch event {
+        case "task-started":
+            // Task started successfully, ready to send audio
             return nil
 
-        case "TaskFailed":
+        case "result-generated":
+            // Recognition result received
             guard let payload = json["payload"] as? [String: Any],
-                  let errorMessage = payload["message"] as? String else {
-                return .error(TranscriptionError.serverError(500, "Unknown error"))
+                  let output = payload["output"] as? [String: Any],
+                  let sentence = output["sentence"] as? [String: Any],
+                  let text = sentence["text"] as? String else {
+                return nil
             }
+            // Check if this is a final result
+            let isFinal = sentence["end_time"] != nil
+            return isFinal ? .final(text) : .partial(text)
+
+        case "task-finished":
+            // Task completed successfully
+            return nil
+
+        case "task-failed":
+            let errorMessage = header["error_message"] as? String ?? "Unknown error"
             return .error(TranscriptionError.serverError(500, errorMessage))
 
         default:
@@ -136,6 +134,9 @@ public actor AlibabaRealtimeAdapter: WebSocketStrategy {
     public func connect(config: TranscriptionConfig) async throws {
         self.config = config
 
+        // Generate task ID (32 characters, UUID without dashes)
+        self.taskId = UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(32).description
+
         // Build WebSocket URL and headers
         let url = try buildWebSocketURL(config: config)
         let headers = buildWebSocketHeaders(config: config)
@@ -143,34 +144,47 @@ public actor AlibabaRealtimeAdapter: WebSocketStrategy {
         // Connect using manager with Bearer token headers
         try await webSocketManager.connect(url: url, headers: headers)
 
-        // Send setup message
+        // Send run-task message
         if let setupMessage = buildSetupMessage(config: config) {
             try await webSocketManager.sendJSON(setupMessage)
         }
     }
 
     public func sendAudio(_ data: Data, isFinal: Bool) async throws {
-        // Send in chunks
+        // DashScope expects raw binary audio chunks, not JSON messages
+        // Send in chunks (16KB each) with 100ms delay between chunks
         let chunkSize = 16 * 1024
         var offset = 0
 
         while offset < data.count {
             let end = min(offset + chunkSize, data.count)
             let chunk = data.subdata(in: offset..<end)
-            let isLastChunk = (end >= data.count) && isFinal
 
-            let message = buildAudioMessage(chunk, isFinal: isLastChunk)
-            try await webSocketManager.sendJSON(message)
+            // Send raw binary data
+            try await webSocketManager.sendData(chunk)
 
             offset = end
 
+            // Small delay between chunks to simulate streaming
             if offset < data.count {
-                try await Task.sleep(nanoseconds: 100_000_000)
+                try await Task.sleep(nanoseconds: 100_000_000) // 100ms
             }
         }
 
+        // Send finish-task message when audio stream ends
         if isFinal {
-            try await webSocketManager.sendJSON(["type": "end"])
+            // Build finish-task message inline to avoid Sendable issues
+            let finishMessage: [String: Any] = [
+                "header": [
+                    "action": "finish-task",
+                    "task_id": taskId,
+                    "streaming": "duplex"
+                ],
+                "payload": [
+                    "input": [:]
+                ]
+            ]
+            try await webSocketManager.sendJSON(finishMessage)
         }
     }
 
