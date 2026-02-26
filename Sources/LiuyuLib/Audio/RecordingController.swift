@@ -328,8 +328,8 @@ fileprivate final class AudioState: @unchecked Sendable {
     private var _preRollBuffers: [AVAudioPCMBuffer] = []
 
     // At 16kHz input with 1024-frame tap buffers at ~48kHz, each callback ≈ 21ms.
-    // 24 buffers ≈ 0.5 seconds of pre-roll audio.
-    private let maxPreRollCount = 24
+    // 48 buffers ≈ 1.0 seconds of pre-roll audio (increased from 24 for better capture).
+    private let maxPreRollCount = 48
 
     var isRecording: Bool {
         lock.lock()

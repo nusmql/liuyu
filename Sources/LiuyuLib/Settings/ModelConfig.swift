@@ -75,8 +75,9 @@ public struct ProviderDefinition: Sendable {
             sttEndpoint: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
             llmEndpoint: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
             sttModels: [
-                "qwen3-asr-flash",              // REST API
-                "fun-asr-realtime",              // WebSocket Real-time (DashScope)
+                "qwen3-asr-flash",                   // REST API
+                "fun-asr-realtime",                  // WebSocket Real-time (DashScope)
+                "fun-asr-realtime-2025-11-07",       // WebSocket Real-time (Latest)
             ],
             llmModels: ["qwen-turbo"],
             sttApiFormat: .chatCompletionsAudio,
@@ -284,7 +285,7 @@ public final class ProviderConfigStore: Sendable {
         let endpoint = pc.baseURL ?? def?.sttEndpoint ?? ""
         // Determine apiFormat based on model
         let format: ApiFormat
-        if assignment.modelId == "fun-asr-realtime" {
+        if assignment.modelId.hasPrefix("fun-asr-realtime") {
             format = .alibabaRealtime // WebSocket streaming
         } else {
             format = def?.sttApiFormat ?? .whisperMultipart
