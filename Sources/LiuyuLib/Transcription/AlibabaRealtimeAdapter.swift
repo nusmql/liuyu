@@ -230,10 +230,11 @@ public actor AlibabaRealtimeAdapter: WebSocketStrategy {
             guard let payload = json["payload"] as? [String: Any],
                   let output = payload["output"] as? [String: Any],
                   let sentence = output["sentence"] as? [String: Any],
-                  let text = sentence["text"] as? String else {
+                  let text = sentence["text"] as? String,
+                  !text.isEmpty else {
                 return nil
             }
-            let isFinal = sentence["end_time"] != nil
+            let isFinal = sentence["sentence_end"] as? Bool ?? false
             return isFinal ? .final(text) : .partial(text)
 
         case "task-finished":
