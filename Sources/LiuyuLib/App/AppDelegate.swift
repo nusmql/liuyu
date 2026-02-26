@@ -406,6 +406,14 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         let session = service.createStreamingSession()
         self.backgroundSession = session
 
+        // Set up disconnect handler to clear background session on unexpected disconnect
+        await session.setDisconnectHandler { [weak self] in
+            Logger.warning("🌡️ Background WebSocket disconnected unexpectedly", category: .stt)
+            Task { @MainActor in
+                self?.backgroundSession = nil
+            }
+        }
+
         do {
             try await session.connect()
             Logger.info("🌡️ Background WebSocket connected and ready", category: .stt)
@@ -449,13 +457,21 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Get background session for recording (if available and fresh)
     /// Returns nil if no valid background session exists
-    private func getBackgroundSession() -> StreamingTranscriptionSession? {
+    private func getBackgroundSession() async -> StreamingTranscriptionSession? {
         guard let session = backgroundSession else { return nil }
+
+        // Check if session is still connected
+        guard await session.connected else {
+            Logger.info("🌡️ Background session disconnected, will create new connection", category: .stt)
+            backgroundSession = nil
+            return nil
+        }
 
         // Check if session is still fresh (used within last 55 seconds)
         guard let lastUsed = lastUsedSession,
               Date().timeIntervalSince(lastUsed) < 55 else {
             Logger.info("🌡️ Background session too old, will create new connection", category: .stt)
+            backgroundSession = nil
             return nil
         }
 
@@ -550,7 +566,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
                 .store(in: &cancellables)
 
             // STEP 3: Use background session (zero latency) or create new connection
-            if let background = getBackgroundSession() {
+            if let background = await getBackgroundSession() {
                 Logger.info("🎬 [T4] Using background WebSocket session (zero latency)", category: .stt)
                 streamingSession = background
                 backgroundSession = nil // Take ownership

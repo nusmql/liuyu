@@ -72,6 +72,15 @@ public actor StreamingTranscriptionSession {
 
     /// Check if the session is currently connected
     public var connected: Bool { isConnected }
+
+    /// Set a handler to be called when the WebSocket disconnects unexpectedly
+    /// Only applies to WebSocket-based strategies
+    public func setDisconnectHandler(_ handler: @Sendable @escaping () -> Void) async {
+        // Cast strategy to WebSocketStrategy to access disconnect handler
+        if let wsStrategy = strategy as? any WebSocketStrategy {
+            await wsStrategy.setDisconnectHandler(handler)
+        }
+    }
 }
 
 /// Unified transcription service that automatically selects the appropriate strategy

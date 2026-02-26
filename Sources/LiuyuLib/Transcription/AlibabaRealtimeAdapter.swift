@@ -45,6 +45,11 @@ public actor AlibabaRealtimeAdapter: WebSocketStrategy {
         }
     }
 
+    /// Set a handler to be called when the WebSocket disconnects unexpectedly
+    public func setDisconnectHandler(_ handler: DisconnectHandler?) async {
+        await webSocketManager.setDisconnectHandler(handler)
+    }
+
     // MARK: - WebSocketStrategy Implementation
 
     /// Build WebSocket URL for DashScope API

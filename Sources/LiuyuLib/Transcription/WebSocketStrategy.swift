@@ -7,6 +7,9 @@ import Foundation
 /// All methods are nonisolated because they are pure functions that don't
 /// access mutable state - they just format messages for the protocol.
 public protocol WebSocketStrategy: TranscriptionStrategy {
+    /// Set a handler to be called when the WebSocket disconnects unexpectedly
+    func setDisconnectHandler(_ handler: DisconnectHandler?) async
+
     /// Build the WebSocket URL with authentication
     nonisolated func buildWebSocketURL(config: TranscriptionConfig) throws -> URL
 
@@ -77,6 +80,9 @@ private final class WebSocketDelegate: NSObject, URLSessionWebSocketDelegate, @u
 /// Message handler type for parsing WebSocket messages
 public typealias MessageHandler = @Sendable (String) -> TranscriptionResult?
 
+/// Disconnect handler type
+public typealias DisconnectHandler = @Sendable () -> Void
+
 /// Manages WebSocket connection for transcription strategies
 public actor WebSocketManager {
     public private(set) var webSocketTask: URLSessionWebSocketTask?
@@ -88,6 +94,7 @@ public actor WebSocketManager {
     private let heartbeatInterval: TimeInterval
     private var webSocketDelegate: WebSocketDelegate?
     private var messageHandler: MessageHandler?
+    private var disconnectHandler: DisconnectHandler?
     private var connectionContinuation: CheckedContinuation<Void, Error>?
     private var connectionTimeoutTask: Task<Void, Never>?
 
@@ -102,6 +109,20 @@ public actor WebSocketManager {
     /// Set the message handler for parsing incoming WebSocket messages
     public func setMessageHandler(_ handler: MessageHandler?) {
         self.messageHandler = handler
+    }
+
+    /// Set the disconnect handler to be called when WebSocket disconnects
+    public func setDisconnectHandler(_ handler: DisconnectHandler?) {
+        self.disconnectHandler = handler
+    }
+
+    /// Handle disconnect - clear state and notify handler
+    private func handleDisconnect() {
+        isConnected = false
+        stopHeartbeat()
+        if let handler = disconnectHandler {
+            handler()
+        }
     }
 
     public func connect(url: URL, headers: [String: String] = [:]) async throws {
@@ -134,8 +155,11 @@ public actor WebSocketManager {
                 await self?.completeConnection(success: true)
             }
         }
-        delegate.onClose = { code, reason in
+        delegate.onClose = { [weak self] code, reason in
             Logger.warning("🎬 [WS-DELEGATE] WebSocket closed with code: \(code)", category: .stt)
+            Task { [weak self] in
+                await self?.handleDisconnect()
+            }
         }
         delegate.onError = { [weak self] error in
             Logger.error("🎬 [WS-DELEGATE] WebSocket delegate error: \(error)", category: .stt)
