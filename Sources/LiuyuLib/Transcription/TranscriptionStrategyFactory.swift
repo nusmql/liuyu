@@ -62,7 +62,7 @@ public enum TranscriptionStrategyFactory {
 
         // Otherwise, infer from model name
         switch (provider, model) {
-        case (.alibaba, "nls-realtime-asr"):
+        case (.alibaba, "fun-asr-realtime"):
             return AlibabaRealtimeAdapter()
         default:
             // Fall back to catalog definition

@@ -76,7 +76,7 @@ public struct ProviderDefinition: Sendable {
             llmEndpoint: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
             sttModels: [
                 "qwen3-asr-flash",              // REST API
-                "nls-realtime-asr",              // WebSocket Real-time
+                "fun-asr-realtime",              // WebSocket Real-time (DashScope)
             ],
             llmModels: ["qwen-turbo"],
             sttApiFormat: .chatCompletionsAudio,
