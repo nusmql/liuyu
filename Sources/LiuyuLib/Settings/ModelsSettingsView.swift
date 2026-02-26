@@ -162,9 +162,16 @@ struct ProvidersSettingsView: View {
         if let selectedId = selectedProviderID,
            let provider = providers.first(where: { $0.id == selectedId }),
            !editingApiKey.isEmpty {
-            try? store.saveApiKey(editingApiKey, for: provider)
-            hasExistingKey = true
-            editingApiKey = ""
+            do {
+                try store.saveApiKey(editingApiKey, for: provider)
+                hasExistingKey = true
+                editingApiKey = ""
+                Logger.info("API Key saved successfully for \(provider.provider.rawValue)", category: .settings)
+            } catch {
+                Logger.error("Failed to save API Key: \(error)", category: .settings)
+                saveMessage = "Save failed"
+                return
+            }
         }
 
         store.saveProviders(providers)
