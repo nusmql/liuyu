@@ -282,7 +282,13 @@ public final class ProviderConfigStore: Sendable {
         }
         let def = ProviderDefinition.catalog[pc.provider]
         let endpoint = pc.baseURL ?? def?.sttEndpoint ?? ""
-        let format = def?.sttApiFormat ?? .whisperMultipart
+        // Determine apiFormat based on model
+        let format: ApiFormat
+        if assignment.modelId == "fun-asr-realtime" {
+            format = .alibabaRealtime // WebSocket streaming
+        } else {
+            format = def?.sttApiFormat ?? .whisperMultipart
+        }
         return (key, endpoint, assignment.modelId, format)
     }
 
