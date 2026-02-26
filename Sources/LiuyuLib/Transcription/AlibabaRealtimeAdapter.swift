@@ -1,44 +1,47 @@
 // Sources/LiuyuLib/Transcription/AlibabaRealtimeAdapter.swift
 import Foundation
-import CryptoKit
-import CommonCrypto
 
-/// Alibaba Cloud Real-time Speech Recognition Adapter
-/// Uses WebSocket protocol for streaming transcription
+/// Alibaba Cloud DashScope Real-time Speech Recognition Adapter
+/// Uses WebSocket protocol with Bearer token authentication
 /// Documentation: https://help.aliyun.com/document_detail/84535.html
 public actor AlibabaRealtimeAdapter: WebSocketStrategy {
 
     public let strategyId = "alibaba-realtime"
     private var config: TranscriptionConfig?
     private var webSocketManager = WebSocketManager(
-        heartbeatInterval: 0, // Disable default heartbeat
-        buildHeartbeatMessage: { nil }
+        heartbeatInterval: 30, // Enable heartbeat for DashScope
+        buildHeartbeatMessage: {
+            return [
+                "type": "ping"
+            ]
+        }
     )
 
     public init() {}
 
     // MARK: - WebSocketStrategy Implementation
 
-    /// Build WebSocket URL with Alibaba-specific authentication
-    /// Format: wss://nls-gateway.aliyuncs.com/ws/v1?token={token}
+    /// Build WebSocket URL for DashScope API
+    /// Format: wss://dashscope.aliyuncs.com/api-ws/v1/inference
     nonisolated public func buildWebSocketURL(config: TranscriptionConfig) throws -> URL {
-        // Generate token from API key
-        let token = try generateToken(apiKey: config.apiKey)
-
         var components = URLComponents()
         components.scheme = "wss"
-        components.host = "nls-gateway.aliyuncs.com"
-        components.path = "/ws/v1"
-        components.queryItems = [
-            URLQueryItem(name: "token", value: token),
-            URLQueryItem(name: "appkey", value: config.model)
-        ]
+        components.host = "dashscope.aliyuncs.com"
+        components.path = "/api-ws/v1/inference"
 
         guard let url = components.url else {
             throw TranscriptionError.networkError("Invalid WebSocket URL")
         }
 
         return url
+    }
+
+    /// Build HTTP headers with Bearer token authentication
+    nonisolated public func buildWebSocketHeaders(config: TranscriptionConfig) -> [String: String] {
+        return [
+            "Authorization": "Bearer \(config.apiKey)",
+            "Content-Type": "application/json"
+        ]
     }
 
     /// Build Alibaba-specific setup message
@@ -133,11 +136,12 @@ public actor AlibabaRealtimeAdapter: WebSocketStrategy {
     public func connect(config: TranscriptionConfig) async throws {
         self.config = config
 
-        // Build WebSocket URL
+        // Build WebSocket URL and headers
         let url = try buildWebSocketURL(config: config)
+        let headers = buildWebSocketHeaders(config: config)
 
-        // Connect using manager
-        try await webSocketManager.connect(url: url)
+        // Connect using manager with Bearer token headers
+        try await webSocketManager.connect(url: url, headers: headers)
 
         // Send setup message
         if let setupMessage = buildSetupMessage(config: config) {
@@ -185,39 +189,5 @@ public actor AlibabaRealtimeAdapter: WebSocketStrategy {
     public func disconnect() async {
         await webSocketManager.disconnect()
         config = nil
-    }
-
-    // MARK: - Token Generation
-
-    nonisolated private func generateToken(apiKey: String) throws -> String {
-        let parts = apiKey.split(separator: ":", maxSplits: 1)
-        guard parts.count == 2 else {
-            return apiKey
-        }
-
-        let accessKeyId = String(parts[0])
-        let accessKeySecret = String(parts[1])
-
-        let timestamp = String(Int(Date().timeIntervalSince1970))
-        let signatureString = "GET\n\n\n" + timestamp + "\n/nls-gateway/ws/v1"
-
-        guard let secretData = accessKeySecret.data(using: .utf8),
-              let signatureData = signatureString.data(using: .utf8) else {
-            throw TranscriptionError.apiKeyInvalid
-        }
-
-        // Use CommonCrypto for SHA1 HMAC
-        var signature = [UInt8](repeating: 0, count: Int(CC_SHA1_DIGEST_LENGTH))
-        signatureData.withUnsafeBytes { signatureBytes in
-            secretData.withUnsafeBytes { secretBytes in
-                CCHmac(CCHmacAlgorithm(kCCHmacAlgSHA1),
-                       secretBytes.baseAddress, secretData.count,
-                       signatureBytes.baseAddress, signatureData.count,
-                       &signature)
-            }
-        }
-        let signatureBase64 = Data(signature).base64EncodedString()
-
-        return "\(accessKeyId):\(signatureBase64):\(timestamp)"
     }
 }

@@ -10,6 +10,9 @@ public protocol WebSocketStrategy: TranscriptionStrategy {
     /// Build the WebSocket URL with authentication
     nonisolated func buildWebSocketURL(config: TranscriptionConfig) throws -> URL
 
+    /// Build HTTP headers for WebSocket connection (e.g., Authorization)
+    nonisolated func buildWebSocketHeaders(config: TranscriptionConfig) -> [String: String]
+
     /// Build the initial setup message sent after connection
     nonisolated func buildSetupMessage(config: TranscriptionConfig) -> [String: Any]?
 
@@ -32,6 +35,10 @@ public extension WebSocketStrategy {
     var supportsStreaming: Bool { true }
 
     var heartbeatInterval: TimeInterval { 30 }
+
+    func buildWebSocketHeaders(config: TranscriptionConfig) -> [String: String] {
+        return [:]
+    }
 
     func buildHeartbeatMessage() -> [String: Any]? {
         return ["type": "ping"]
@@ -58,10 +65,20 @@ public actor WebSocketManager {
         self.buildHeartbeatMessage = buildHeartbeatMessage
     }
 
-    public func connect(url: URL) async throws {
-        // Create WebSocket task
+    public func connect(url: URL, headers: [String: String] = [:]) async throws {
+        // Create WebSocket task with custom headers
         let session = URLSession(configuration: .default)
-        webSocketTask = session.webSocketTask(with: url)
+
+        if headers.isEmpty {
+            webSocketTask = session.webSocketTask(with: url)
+        } else {
+            // Create URLRequest with custom headers for authentication
+            var request = URLRequest(url: url)
+            for (key, value) in headers {
+                request.setValue(value, forHTTPHeaderField: key)
+            }
+            webSocketTask = session.webSocketTask(with: request)
+        }
 
         // Set up message handler
         setupMessageHandler()
