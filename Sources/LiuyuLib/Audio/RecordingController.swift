@@ -1,6 +1,7 @@
 // Sources/LiuyuLib/Audio/RecordingController.swift
 @preconcurrency import Foundation
 @preconcurrency import AVFoundation
+import AppKit
 import Combine
 
 @MainActor
@@ -47,6 +48,29 @@ public class RecordingController: ObservableObject {
                 self.coolDown()
             }
         }
+
+        // Handle system sleep/wake to prevent audio engine overload after wake
+        NotificationCenter.default.addObserver(
+            forName: NSWorkspace.willSleepNotification,
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.isWarmedUp else { return }
+                Logger.info("System will sleep — cooling down audio engine", category: .audio)
+                self.coolDown()
+            }
+        }
+
+        NotificationCenter.default.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil, queue: .main
+        ) { _ in
+            MainActor.assumeIsolated {
+                Logger.info("System woke up — will warm up audio engine when needed", category: .audio)
+                // Don't warm up immediately; let the next recording request trigger it
+                // This avoids racing with audio device initialization
+            }
+        }
     }
 
     public enum RecordingError: Error, LocalizedError {
@@ -90,21 +114,24 @@ public class RecordingController: ObservableObject {
         let inputNode = newEngine.inputNode
 
         // After sleep/wake or device change, inputNode may report stale format.
-        // Retry multiple times with increasing delays to sync with hardware.
+        // Use RunLoop polling instead of Thread.sleep to avoid blocking main thread.
         var inputFormat = inputNode.outputFormat(forBus: 0)
-        var retries = 0
-        let maxRetries = 5
+        let maxWaitTime: TimeInterval = 2.0  // Maximum total wait time
+        let pollInterval: TimeInterval = 0.05  // Poll every 50ms
+        var totalWaited: TimeInterval = 0
 
-        while (inputFormat.sampleRate == 0 || inputFormat.channelCount == 0) && retries < maxRetries {
-            Thread.sleep(forTimeInterval: 0.05 * Double(retries + 1))
+        while (inputFormat.sampleRate == 0 || inputFormat.channelCount == 0) && totalWaited < maxWaitTime {
+            // Use RunLoop to yield control instead of blocking Thread.sleep
+            RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: pollInterval))
             inputFormat = inputNode.outputFormat(forBus: 0)
-            retries += 1
+            totalWaited += pollInterval
         }
 
         guard inputFormat.sampleRate > 0 else {
-            Logger.error("No audio input available after \(maxRetries) retries", category: .audio)
+            Logger.error("No audio input available after \(String(format: "%.2f", totalWaited))s", category: .audio)
             self.engine = nil
-            return
+            throw RecordingError.engineStartFailed(NSError(domain: "RecordingController", code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "Audio input not available after sleep/wake"]))
         }
 
         let pcmFormat = AVAudioFormat(standardFormatWithSampleRate: 16000, channels: 1)!
