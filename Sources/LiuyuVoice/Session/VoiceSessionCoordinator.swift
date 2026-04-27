@@ -11,6 +11,9 @@ public actor VoiceSessionCoordinator {
     private var pendingEvents: [VoiceSessionEvent] = []
     private var pendingEventsFinish = false
     private var metrics = VoiceSessionMetrics()
+    private var providerReady = false
+    private var stopRequested = false
+    private var providerFinished = false
     private var terminalProviderResultReceived = false
 
     public init(
@@ -41,6 +44,9 @@ public actor VoiceSessionCoordinator {
     public func start(config: TranscriptionProviderConfig) async throws {
         metrics.captureRequestedAtNanos = nowNanos()
         metrics.providerPrepareStartedAtNanos = nowNanos()
+        providerReady = false
+        stopRequested = false
+        providerFinished = false
         terminalProviderResultReceived = false
 
         resultTask = Task { [provider] in
@@ -51,14 +57,38 @@ public actor VoiceSessionCoordinator {
             self.handleProviderResultStreamEnded()
         }
 
+        let frameStream = source.frames()
+        frameTask = Task {
+            for await frame in frameStream {
+                if Task.isCancelled { break }
+                await self.acceptLiveFrame(frame)
+            }
+        }
+
+        do {
+            try await source.start()
+        } catch {
+            frameTask?.cancel()
+            if let frameTask {
+                await frameTask.value
+            }
+            resultTask?.cancel()
+            frameTask = nil
+            resultTask = nil
+            throw error
+        }
+        yieldEvent(.started(metrics))
+
         do {
             try await provider.prepare(config: config)
         } catch {
+            await stopSourceAndDrainFrames()
             resultTask?.cancel()
             resultTask = nil
             throw error
         }
         metrics.providerReadyAtNanos = nowNanos()
+        providerReady = true
 
         let preRoll = buffer.beginUtterance()
         metrics.preRollFrameCount = preRoll.count
@@ -66,15 +96,13 @@ public actor VoiceSessionCoordinator {
             try await send(frame)
         }
 
-        frameTask = Task { [source] in
-            for await frame in source.frames() {
-                if Task.isCancelled { break }
-                await self.acceptLiveFrame(frame)
+        if stopRequested {
+            buffer.requestEnd()
+            if !buffer.closed {
+                buffer.forceClose()
             }
+            await finishProvider()
         }
-
-        try await source.start()
-        yieldEvent(.started(metrics))
     }
 
     private func acceptLiveFrame(_ frame: VoiceAudioFrame) async {
@@ -85,6 +113,8 @@ public actor VoiceSessionCoordinator {
         guard buffer.accept(frame) else { return }
         metrics.lastFrameAcceptedAtNanos = frame.timestampNanos
         yieldEvent(.audioLevel(frame.audioLevel, metrics))
+
+        guard providerReady else { return }
 
         do {
             try await send(frame)
@@ -106,32 +136,50 @@ public actor VoiceSessionCoordinator {
 
     public func stop(reason: VoiceSessionStopReason) async {
         metrics.logicalStopAtNanos = nowNanos()
+        stopRequested = true
+        await stopSourceAndDrainFrames()
+
+        guard providerReady else { return }
+
         buffer.requestEnd()
+        if !buffer.closed {
+            buffer.forceClose()
+        }
+
+        await finishProvider()
+    }
+
+    private func stopSourceAndDrainFrames() async {
         await source.stop()
 
         if let frameTask {
             await frameTask.value
         }
         frameTask = nil
-        if !buffer.closed {
-            buffer.forceClose()
-        }
+    }
+
+    private func finishProvider() async {
+        guard !providerFinished else { return }
+        providerFinished = true
 
         do {
             metrics.finishSentAtNanos = nowNanos()
             try await provider.finish()
         } catch {
+            terminalProviderResultReceived = true
             yieldEvent(.failed(error.localizedDescription, metrics), finish: true)
         }
     }
 
     public func cancel() async {
+        terminalProviderResultReceived = true
+        resultTask?.cancel()
+        resultTask = nil
+        frameTask?.cancel()
         await source.stop()
         await provider.cancel()
-        frameTask?.cancel()
-        resultTask?.cancel()
         frameTask = nil
-        resultTask = nil
+        providerReady = false
         yieldEvent(.cancelled(metrics), finish: true)
     }
 
