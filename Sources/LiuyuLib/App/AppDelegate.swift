@@ -3,6 +3,32 @@ import AppKit
 import Combine
 import LiuyuVoice
 
+enum RecordingPhaseEffect: Equatable {
+    case none
+    case startRecordingUI
+    case stopRecordingUI
+    case showTranscriptionResult(String)
+    case showError(String)
+    case cleanupVoiceSession
+}
+
+func recordingPhaseEffect(for phase: RecordingState.RecordingPhase) -> RecordingPhaseEffect {
+    switch phase {
+    case .debouncing:
+        return .none
+    case .recording:
+        return .startRecordingUI
+    case .processing:
+        return .stopRecordingUI
+    case .completed(let text):
+        return .showTranscriptionResult(text)
+    case .error(let message):
+        return .showError(message)
+    case .idle:
+        return .cleanupVoiceSession
+    }
+}
+
 @MainActor
 public class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
@@ -254,27 +280,26 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     private func handleRecordingPhaseChange(_ phase: RecordingState.RecordingPhase) {
         Logger.debug("Recording phase changed to: \(phase)", category: .app)
 
-        switch phase {
-        case .debouncing:
+        switch recordingPhaseEffect(for: phase) {
+        case .none:
             // Wait for the debounce timer before opening the audio source.
             break
 
-        case .recording:
+        case .startRecordingUI:
             startRecordingUI()
 
-        case .processing:
+        case .stopRecordingUI:
             stopRecordingUI()
 
-        case .completed(let text):
+        case .showTranscriptionResult(let text):
             showTranscriptionResult(text)
 
-        case .error(let message):
+        case .showError(let message):
             showError(message)
             recordingState.cancel()
 
-        case .idle:
-            // Cleanup if needed
-            break
+        case .cleanupVoiceSession:
+            Task { await cleanupVoiceSession() }
         }
     }
 

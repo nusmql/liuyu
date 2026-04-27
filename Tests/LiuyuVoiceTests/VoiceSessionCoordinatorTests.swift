@@ -139,6 +139,54 @@ final class VoiceSessionCoordinatorTests: XCTestCase {
         XCTAssertEqual(failures, ["Recording stopped before audio capture was ready."])
     }
 
+    func testStopDuringSourceStartStopsSourceAfterStartReturns() async throws {
+        let source = BlockingStartAudioSource()
+        let provider = StartAfterStopProvider()
+        let coordinator = VoiceSessionCoordinator(
+            source: source,
+            provider: provider,
+            configuration: VoiceSessionConfiguration(preRollFrameLimit: 0, tailFrameLimit: 0)
+        )
+
+        let startTask = Task {
+            try await coordinator.start(config: .init(apiKey: "key", endpoint: "mock", model: "mock"))
+        }
+
+        try await source.waitUntilStartRequested()
+        await coordinator.stop(reason: .userReleased)
+        await source.releaseStart()
+        try await startTask.value
+
+        let stopCount = await source.stopCallCount()
+        let isRunning = await source.isRunning()
+        XCTAssertEqual(stopCount, 2)
+        XCTAssertFalse(isRunning)
+    }
+
+    func testCancelDuringSourceStartStopsSourceAfterStartReturns() async throws {
+        let source = BlockingStartAudioSource()
+        let provider = StartAfterStopProvider()
+        let coordinator = VoiceSessionCoordinator(
+            source: source,
+            provider: provider,
+            configuration: VoiceSessionConfiguration(preRollFrameLimit: 0, tailFrameLimit: 0)
+        )
+
+        let startTask = Task {
+            try await coordinator.start(config: .init(apiKey: "key", endpoint: "mock", model: "mock"))
+        }
+
+        try await source.waitUntilStartRequested()
+        await coordinator.cancel()
+        await source.releaseStart()
+        try await startTask.value
+
+        let stopCount = await source.stopCallCount()
+        let isRunning = await source.isRunning()
+        XCTAssertEqual(stopCount, 2)
+        XCTAssertFalse(isRunning)
+    }
+
     func testCancelDuringProviderPrepareDoesNotSendBufferedFrames() async throws {
         let source = StartYieldingAudioSource(frame: makeFrame(sequence: 1))
         let provider = BlockingPrepareProvider()
@@ -173,6 +221,46 @@ final class VoiceSessionCoordinatorTests: XCTestCase {
         XCTAssertEqual(sent, [])
         XCTAssertEqual(failures, [])
         XCTAssertEqual(cancellations.count, 1)
+    }
+
+    func testStopWaitsForInFlightFlushBeforeFinish() async throws {
+        let source = StartYieldingAudioSource(frames: [
+            makeFrame(sequence: 1),
+            makeFrame(sequence: 2)
+        ])
+        let provider = BlockingSendProvider()
+        let coordinator = VoiceSessionCoordinator(
+            source: source,
+            provider: provider,
+            configuration: VoiceSessionConfiguration(preRollFrameLimit: 0, tailFrameLimit: 0)
+        )
+
+        let startTask = Task {
+            try await coordinator.start(config: .init(apiKey: "key", endpoint: "mock", model: "mock"))
+        }
+
+        try await provider.waitUntilFirstSendStarted()
+        let stopCompletion = AsyncFlag()
+        let stopTask = Task {
+            await coordinator.stop(reason: .userReleased)
+            await stopCompletion.mark()
+        }
+        try await Task.sleep(for: .milliseconds(20))
+        let stopCompletedBeforeFlush = await stopCompletion.isMarked()
+        XCTAssertFalse(stopCompletedBeforeFlush)
+
+        await provider.releaseFirstSend()
+        try await startTask.value
+        await stopTask.value
+
+        let events = await provider.events()
+        XCTAssertEqual(events, [
+            "send:start:1",
+            "send:end:1",
+            "send:start:2",
+            "send:end:2",
+            "finish"
+        ])
     }
 
     func testCoordinatorSendsAllBufferedFramesBeforeFinish() async throws {
@@ -272,6 +360,37 @@ final class VoiceSessionCoordinatorTests: XCTestCase {
             return message
         }
         XCTAssertEqual(failures, ["Transcription provider ended without a final result."])
+    }
+
+    func testProviderFailureStopsCapture() async throws {
+        let source = IdleAudioSource()
+        let provider = FailureEmittingProvider()
+        let coordinator = VoiceSessionCoordinator(
+            source: source,
+            provider: provider,
+            configuration: VoiceSessionConfiguration(preRollFrameLimit: 0, tailFrameLimit: 0)
+        )
+        let events = coordinator.events()
+
+        async let collectedEvents = Self.collectEvents(from: events)
+        try await coordinator.start(config: .init(apiKey: "key", endpoint: "mock", model: "mock"))
+        try await provider.waitUntilResultsSubscribed()
+        let isRunningBeforeFailure = await source.isRunning()
+        XCTAssertTrue(isRunningBeforeFailure)
+
+        await provider.emitFailure("provider failed")
+
+        let eventsResult = try await collectedEvents
+        let failures = eventsResult.compactMap { event -> String? in
+            guard case .failed(let message, _) = event else { return nil }
+            return message
+        }
+
+        XCTAssertEqual(failures, ["provider failed"])
+        let isRunningAfterFailure = await source.isRunning()
+        let stopCount = await source.stopCallCount()
+        XCTAssertFalse(isRunningAfterFailure)
+        XCTAssertEqual(stopCount, 1)
     }
 
     func testCoordinatorCancelDoesNotEmitProviderEndedFailure() async throws {
@@ -427,6 +546,19 @@ final class VoiceSessionCoordinatorTests: XCTestCase {
             audioLevel: audioLevel
         )
     }
+
+}
+
+private actor AsyncFlag {
+    private var marked = false
+
+    func mark() {
+        marked = true
+    }
+
+    func isMarked() -> Bool {
+        marked
+    }
 }
 
 private actor PrepareFailingProvider: TranscriptionProvider {
@@ -561,6 +693,8 @@ private actor BlockingStartAudioSource: AudioSource {
     private var continuation: AsyncStream<VoiceAudioFrame>.Continuation?
     private var startRequested = false
     private var stopped = false
+    private var running = false
+    private var stopCount = 0
     private var startRequestedContinuation: CheckedContinuation<Void, Never>?
     private var releaseStartContinuation: CheckedContinuation<Void, Never>?
 
@@ -578,10 +712,13 @@ private actor BlockingStartAudioSource: AudioSource {
         await withCheckedContinuation { continuation in
             releaseStartContinuation = continuation
         }
+        running = true
     }
 
     func stop() async {
         stopped = true
+        running = false
+        stopCount += 1
         continuation?.finish()
         continuation = nil
     }
@@ -602,8 +739,100 @@ private actor BlockingStartAudioSource: AudioSource {
         stopped
     }
 
+    func isRunning() -> Bool {
+        running
+    }
+
+    func stopCallCount() -> Int {
+        stopCount
+    }
+
     private func setContinuation(_ continuation: AsyncStream<VoiceAudioFrame>.Continuation) {
         self.continuation = continuation
+    }
+}
+
+private actor IdleAudioSource: AudioSource {
+    private var continuation: AsyncStream<VoiceAudioFrame>.Continuation?
+    private var running = false
+    private var stopCount = 0
+
+    nonisolated func frames() -> AsyncStream<VoiceAudioFrame> {
+        AsyncStream { continuation in
+            Task { await self.setContinuation(continuation) }
+        }
+    }
+
+    func start() async throws {
+        running = true
+    }
+
+    func stop() async {
+        running = false
+        stopCount += 1
+        continuation?.finish()
+        continuation = nil
+    }
+
+    func isRunning() -> Bool {
+        running
+    }
+
+    func stopCallCount() -> Int {
+        stopCount
+    }
+
+    private func setContinuation(_ continuation: AsyncStream<VoiceAudioFrame>.Continuation) {
+        self.continuation = continuation
+    }
+}
+
+private actor BlockingSendProvider: TranscriptionProvider {
+    nonisolated let mode: TranscriptionMode = .streaming
+    private var recordedEvents: [String] = []
+    private var firstSendStarted = false
+    private var firstSendStartedContinuation: CheckedContinuation<Void, Never>?
+    private var releaseFirstSendContinuation: CheckedContinuation<Void, Never>?
+
+    func prepare(config: TranscriptionProviderConfig) async throws {}
+
+    func send(_ frame: VoiceAudioFrame) async throws {
+        recordedEvents.append("send:start:\(frame.sequence)")
+        if frame.sequence == 1 {
+            firstSendStarted = true
+            firstSendStartedContinuation?.resume()
+            firstSendStartedContinuation = nil
+            await withCheckedContinuation { continuation in
+                releaseFirstSendContinuation = continuation
+            }
+        }
+        recordedEvents.append("send:end:\(frame.sequence)")
+    }
+
+    func finish() async throws {
+        recordedEvents.append("finish")
+    }
+
+    nonisolated func results() -> AsyncStream<TranscriptionProviderResult> {
+        AsyncStream { _ in }
+    }
+
+    func cancel() async {}
+
+    func waitUntilFirstSendStarted() async throws {
+        if firstSendStarted { return }
+        await withCheckedContinuation { continuation in
+            firstSendStartedContinuation = continuation
+        }
+    }
+
+    func releaseFirstSend() {
+        releaseFirstSendContinuation?.resume()
+        releaseFirstSendContinuation = nil
+    }
+
+    func events() -> [String] {
+        recordedEvents
     }
 }
 
@@ -706,6 +935,49 @@ private actor CancelEmittingProvider: TranscriptionProvider {
         continuation?.finish()
         continuation = nil
         try? await Task.sleep(for: .milliseconds(20))
+    }
+
+    private func setContinuation(_ continuation: AsyncStream<TranscriptionProviderResult>.Continuation) {
+        self.continuation = continuation
+        resultsSubscribed = true
+        resultsSubscribedContinuation?.resume()
+        resultsSubscribedContinuation = nil
+    }
+
+    func waitUntilResultsSubscribed() async throws {
+        if resultsSubscribed { return }
+        await withCheckedContinuation { continuation in
+            resultsSubscribedContinuation = continuation
+        }
+    }
+}
+
+private actor FailureEmittingProvider: TranscriptionProvider {
+    nonisolated let mode: TranscriptionMode = .streaming
+    private var continuation: AsyncStream<TranscriptionProviderResult>.Continuation?
+    private var resultsSubscribed = false
+    private var resultsSubscribedContinuation: CheckedContinuation<Void, Never>?
+
+    func prepare(config: TranscriptionProviderConfig) async throws {}
+
+    func send(_ frame: VoiceAudioFrame) async throws {}
+
+    func finish() async throws {}
+
+    nonisolated func results() -> AsyncStream<TranscriptionProviderResult> {
+        AsyncStream { continuation in
+            Task { await self.setContinuation(continuation) }
+        }
+    }
+
+    func cancel() async {
+        continuation?.finish()
+        continuation = nil
+    }
+
+    func emitFailure(_ message: String) {
+        continuation?.yield(.failure(message))
+        continuation?.finish()
     }
 
     private func setContinuation(_ continuation: AsyncStream<TranscriptionProviderResult>.Continuation) {
