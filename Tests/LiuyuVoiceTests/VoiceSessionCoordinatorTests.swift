@@ -389,6 +389,47 @@ final class VoiceSessionCoordinatorTests: XCTestCase {
         XCTAssertFalse(prepareCalled)
     }
 
+    func testStopDuringStartFailureCleanupFinishesEventStream() async throws {
+        let source = BlockingStartAudioSource(
+            throwsOnStart: true,
+            finishOnStopStartingAt: 2
+        )
+        let provider = StartAfterStopProvider()
+        let coordinator = VoiceSessionCoordinator(
+            source: source,
+            provider: provider,
+            configuration: VoiceSessionConfiguration(preRollFrameLimit: 0, tailFrameLimit: 0)
+        )
+        let events = coordinator.events()
+
+        async let collectedEvents = Self.collectEvents(from: events)
+        let startTask = Task {
+            try await coordinator.start(config: .init(apiKey: "key", endpoint: "mock", model: "mock"))
+        }
+
+        try await source.waitUntilStartRequested()
+        await source.releaseStart()
+        try await source.waitUntilStopCallCount(1)
+
+        let stopTask = Task {
+            await coordinator.stop(reason: .userReleased)
+        }
+        try await source.waitUntilStopCallCount(2)
+
+        try await startTask.value
+        await stopTask.value
+
+        let eventsResult = try await collectedEvents
+        let failures = eventsResult.compactMap { event -> String? in
+            guard case .failed(let message, _) = event else { return nil }
+            return message
+        }
+        let prepareCalled = await provider.prepareWasCalled()
+
+        XCTAssertEqual(failures, ["Recording stopped before audio capture was ready."])
+        XCTAssertFalse(prepareCalled)
+    }
+
     func testCancelDuringSourceStartStopsSourceAfterStartReturns() async throws {
         let source = BlockingStartAudioSource()
         let provider = StartAfterStopProvider()
@@ -955,6 +996,7 @@ private actor StartYieldingAudioSource: AudioSource {
 private actor BlockingStartAudioSource: AudioSource {
     private let throwsOnStart: Bool
     private let suspendFirstStop: Bool
+    private let finishOnStopStartingAt: Int
     private var continuation: AsyncStream<VoiceAudioFrame>.Continuation?
     private var startRequested = false
     private var stopped = false
@@ -964,10 +1006,16 @@ private actor BlockingStartAudioSource: AudioSource {
     private var releaseStartContinuation: CheckedContinuation<Void, Never>?
     private var stopRequestedContinuation: CheckedContinuation<Void, Never>?
     private var releaseStopContinuation: CheckedContinuation<Void, Never>?
+    private var stopCountWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
 
-    init(throwsOnStart: Bool = false, suspendFirstStop: Bool = false) {
+    init(
+        throwsOnStart: Bool = false,
+        suspendFirstStop: Bool = false,
+        finishOnStopStartingAt: Int = 1
+    ) {
         self.throwsOnStart = throwsOnStart
         self.suspendFirstStop = suspendFirstStop
+        self.finishOnStopStartingAt = finishOnStopStartingAt
     }
 
     nonisolated func frames() -> AsyncStream<VoiceAudioFrame> {
@@ -994,9 +1042,12 @@ private actor BlockingStartAudioSource: AudioSource {
         stopped = true
         running = false
         stopCount += 1
+        resumeStopCountWaiters()
         let shouldSuspend = suspendFirstStop && stopCount == 1
-        continuation?.finish()
-        continuation = nil
+        if stopCount >= finishOnStopStartingAt {
+            continuation?.finish()
+            continuation = nil
+        }
         if shouldSuspend {
             stopRequestedContinuation?.resume()
             stopRequestedContinuation = nil
@@ -1030,6 +1081,13 @@ private actor BlockingStartAudioSource: AudioSource {
         releaseStopContinuation = nil
     }
 
+    func waitUntilStopCallCount(_ expectedCount: Int) async throws {
+        if stopCount >= expectedCount { return }
+        await withCheckedContinuation { continuation in
+            stopCountWaiters.append((expectedCount, continuation))
+        }
+    }
+
     func wasStopped() -> Bool {
         stopped
     }
@@ -1044,6 +1102,18 @@ private actor BlockingStartAudioSource: AudioSource {
 
     private func setContinuation(_ continuation: AsyncStream<VoiceAudioFrame>.Continuation) {
         self.continuation = continuation
+    }
+
+    private func resumeStopCountWaiters() {
+        var remaining: [(Int, CheckedContinuation<Void, Never>)] = []
+        for waiter in stopCountWaiters {
+            if stopCount >= waiter.0 {
+                waiter.1.resume()
+            } else {
+                remaining.append(waiter)
+            }
+        }
+        stopCountWaiters = remaining
     }
 }
 

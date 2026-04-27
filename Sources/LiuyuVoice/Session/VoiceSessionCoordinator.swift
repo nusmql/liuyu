@@ -100,7 +100,7 @@ public actor VoiceSessionCoordinator {
             var terminalBeforeStartFailure = terminalProviderResultReceived
             await source.stop()
             terminalBeforeStartFailure = terminalBeforeStartFailure || terminalProviderResultReceived
-            await cleanupAfterStartFailure(markFinished: !(terminalBeforeStartFailure || cancelRequested || stopRequested))
+            await cleanupAfterStartFailure()
             terminalBeforeStartFailure = terminalBeforeStartFailure || terminalProviderResultReceived
             if terminalBeforeStartFailure {
                 return
@@ -112,6 +112,7 @@ public actor VoiceSessionCoordinator {
                 await failBeforeProviderReady("Recording stopped before audio capture was ready.")
                 return
             }
+            lifecycleState = .finished
             throw error
         }
 
@@ -338,7 +339,7 @@ public actor VoiceSessionCoordinator {
         frameTask = nil
     }
 
-    private func cleanupAfterStartFailure(markFinished: Bool = true) async {
+    private func cleanupAfterStartFailure() async {
         frameTask?.cancel()
         if let frameTask {
             await frameTask.value
@@ -346,9 +347,6 @@ public actor VoiceSessionCoordinator {
         resultTask?.cancel()
         frameTask = nil
         resultTask = nil
-        if markFinished {
-            lifecycleState = .finished
-        }
     }
 
     private func failBeforeProviderReady(_ message: String) async {
