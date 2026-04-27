@@ -39,7 +39,7 @@ public actor AlibabaRealtimeTransport: StreamingTranscriptionTransport {
         await adapter.disconnect()
     }
 
-    static func mapAdapterResults(_ input: AsyncStream<TranscriptionResult>) -> AsyncStream<TranscriptionProviderResult> {
+    nonisolated static func mapAdapterResults(_ input: AsyncStream<TranscriptionResult>) -> AsyncStream<TranscriptionProviderResult> {
         AsyncStream { continuation in
             let task = Task {
                 var lastNonEmptyText: String?

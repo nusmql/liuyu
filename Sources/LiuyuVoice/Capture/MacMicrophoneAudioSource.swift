@@ -144,7 +144,7 @@ private final class MicrophoneFrameState: @unchecked Sendable {
         lock.lock()
         frame = VoiceAudioFrame(
             sequence: nextSequence,
-            timestampNanos: Int64(Date().timeIntervalSince1970 * 1_000_000_000),
+            timestampNanos: Int64(DispatchTime.now().uptimeNanoseconds),
             format: .pcm16Mono16k,
             pcm16MonoData: pcm16MonoData,
             isPreRoll: false
