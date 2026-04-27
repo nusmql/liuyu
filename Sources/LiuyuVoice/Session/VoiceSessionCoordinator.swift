@@ -47,7 +47,13 @@ public actor VoiceSessionCoordinator {
             }
         }
 
-        try await provider.prepare(config: config)
+        do {
+            try await provider.prepare(config: config)
+        } catch {
+            resultTask?.cancel()
+            resultTask = nil
+            throw error
+        }
         metrics.providerReadyAtNanos = nowNanos()
 
         let preRoll = buffer.beginUtterance()

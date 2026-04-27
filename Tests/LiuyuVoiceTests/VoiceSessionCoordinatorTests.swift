@@ -6,6 +6,25 @@ final class VoiceSessionCoordinatorTests: XCTestCase {
         case timedOut
     }
 
+    fileprivate enum PrepareFailure: Error {
+        case failed
+    }
+
+    func testStartCancelsResultTaskWhenPrepareFails() async throws {
+        let source = FakeAudioSource(frames: [])
+        let provider = PrepareFailingProvider()
+        let coordinator = VoiceSessionCoordinator(source: source, provider: provider)
+
+        do {
+            try await coordinator.start(config: .init(apiKey: "key", endpoint: "mock", model: "mock"))
+            XCTFail("Expected prepare failure")
+        } catch PrepareFailure.failed {
+            // expected
+        }
+
+        try await Self.waitForResultStreamTermination(provider: provider)
+    }
+
     func testCoordinatorSendsAllBufferedFramesBeforeFinish() async throws {
         let frames = (1...5).map { makeFrame(sequence: Int64($0)) }
         let source = FakeAudioSource(frames: frames)
@@ -103,5 +122,51 @@ final class VoiceSessionCoordinatorTests: XCTestCase {
             pcm16MonoData: Data([1, 2]),
             isPreRoll: false
         )
+    }
+}
+
+private actor PrepareFailingProvider: TranscriptionProvider {
+    nonisolated let mode: TranscriptionMode = .streaming
+    private var resultStreamTerminated = false
+
+    func prepare(config: TranscriptionProviderConfig) async throws {
+        throw VoiceSessionCoordinatorTests.PrepareFailure.failed
+    }
+
+    func send(_ frame: VoiceAudioFrame) async throws {}
+
+    func finish() async throws {}
+
+    nonisolated func results() -> AsyncStream<TranscriptionProviderResult> {
+        AsyncStream { continuation in
+            continuation.onTermination = { _ in
+                Task { await self.markResultStreamTerminated() }
+            }
+        }
+    }
+
+    func cancel() async {}
+
+    func markResultStreamTerminated() {
+        resultStreamTerminated = true
+    }
+
+    func hasTerminatedResultStream() -> Bool {
+        resultStreamTerminated
+    }
+}
+
+private extension VoiceSessionCoordinatorTests {
+    static func waitForResultStreamTermination(
+        provider: PrepareFailingProvider,
+        attempts: Int = 100
+    ) async throws {
+        for _ in 0..<attempts {
+            if await provider.hasTerminatedResultStream() {
+                return
+            }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        throw EventCollectionError.timedOut
     }
 }
