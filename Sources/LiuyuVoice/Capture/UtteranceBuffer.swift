@@ -47,7 +47,8 @@ public struct UtteranceBuffer: Sendable {
                 timestampNanos: frame.timestampNanos,
                 format: frame.format,
                 pcm16MonoData: frame.pcm16MonoData,
-                isPreRoll: true
+                isPreRoll: true,
+                audioLevel: frame.audioLevel
             )
         }
         utterance.append(contentsOf: frames)

@@ -137,7 +137,7 @@ private final class MicrophoneFrameState: @unchecked Sendable {
         lock.unlock()
     }
 
-    func yield(pcm16MonoData: Data) {
+    func yield(pcm16MonoData: Data, audioLevel: Float) {
         let frame: VoiceAudioFrame
         let continuation: AsyncStream<VoiceAudioFrame>.Continuation?
 
@@ -147,7 +147,8 @@ private final class MicrophoneFrameState: @unchecked Sendable {
             timestampNanos: Int64(DispatchTime.now().uptimeNanoseconds),
             format: .pcm16Mono16k,
             pcm16MonoData: pcm16MonoData,
-            isPreRoll: false
+            isPreRoll: false,
+            audioLevel: audioLevel
         )
         nextSequence += 1
         continuation = self.continuation
@@ -177,7 +178,10 @@ private func installMicrophoneTap(
               let data = pcm16Data(from: convertedBuffer) else {
             return
         }
-        frameState.yield(pcm16MonoData: data)
+        frameState.yield(
+            pcm16MonoData: data,
+            audioLevel: normalizedAudioLevel(from: convertedBuffer)
+        )
     }
 }
 
@@ -223,4 +227,22 @@ private func pcm16Data(from buffer: AVAudioPCMBuffer) -> Data? {
 
     let bytesPerSample = MemoryLayout<Int16>.size
     return Data(bytes: channelData[0], count: Int(buffer.frameLength) * bytesPerSample)
+}
+
+private func normalizedAudioLevel(from buffer: AVAudioPCMBuffer) -> Float {
+    guard buffer.frameLength > 0, let channelData = buffer.int16ChannelData else {
+        return 0
+    }
+
+    let frameCount = Int(buffer.frameLength)
+    let samples = UnsafeBufferPointer(start: channelData[0], count: frameCount)
+    var rms: Float = 0
+    for sample in samples {
+        let normalizedSample = Float(sample) / Float(Int16.max)
+        rms += normalizedSample * normalizedSample
+    }
+    rms = sqrt(rms / Float(max(frameCount, 1)))
+
+    let db = 20 * log10(max(rms, 1e-6))
+    return max(0, min(1, (db + 50) / 50))
 }

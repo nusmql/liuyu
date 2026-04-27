@@ -76,6 +76,53 @@ final class VoiceSessionCoordinatorTests: XCTestCase {
         XCTAssertNotNil(finalEvents[0].finalReceivedAtNanos)
     }
 
+    func testCoordinatorEmitsAudioLevelForAcceptedLiveFrames() async throws {
+        let source = FakeAudioSource(frames: [
+            makeFrame(sequence: 1, audioLevel: 0.6)
+        ])
+        let provider = MockTranscriptionProvider(finalText: "done")
+        let coordinator = VoiceSessionCoordinator(
+            source: source,
+            provider: provider,
+            configuration: VoiceSessionConfiguration(preRollFrameLimit: 0, tailFrameLimit: 0)
+        )
+        let events = coordinator.events()
+
+        async let collectedEvents = Self.collectEvents(from: events)
+        try await coordinator.start(config: .init(apiKey: "key", endpoint: "mock", model: "mock"))
+        try await Self.waitForSentFrameCount(1, provider: provider)
+        await coordinator.stop(reason: .userReleased)
+
+        let audioLevels = try await collectedEvents.compactMap { event -> Float? in
+            guard case .audioLevel(let level, _) = event else { return nil }
+            return level
+        }
+        XCTAssertEqual(audioLevels, [0.6])
+    }
+
+    func testCoordinatorFailsWhenProviderResultsEndWithoutTerminalEvent() async throws {
+        let source = FakeAudioSource(frames: [
+            makeFrame(sequence: 1)
+        ])
+        let provider = SilentFinishingProvider()
+        let coordinator = VoiceSessionCoordinator(
+            source: source,
+            provider: provider,
+            configuration: VoiceSessionConfiguration(preRollFrameLimit: 0, tailFrameLimit: 0)
+        )
+        let events = coordinator.events()
+
+        async let collectedEvents = Self.collectEvents(from: events)
+        try await coordinator.start(config: .init(apiKey: "key", endpoint: "mock", model: "mock"))
+        await coordinator.stop(reason: .userReleased)
+
+        let failures = try await collectedEvents.compactMap { event -> String? in
+            guard case .failed(let message, _) = event else { return nil }
+            return message
+        }
+        XCTAssertEqual(failures, ["Transcription provider ended without a final result."])
+    }
+
     private static func collectEvents(
         from stream: AsyncStream<VoiceSessionEvent>,
         timeout: Duration = .seconds(1)
@@ -114,13 +161,14 @@ final class VoiceSessionCoordinatorTests: XCTestCase {
         throw EventCollectionError.timedOut
     }
 
-    private func makeFrame(sequence: Int64) -> VoiceAudioFrame {
+    private func makeFrame(sequence: Int64, audioLevel: Float = 0) -> VoiceAudioFrame {
         VoiceAudioFrame(
             sequence: sequence,
             timestampNanos: sequence,
             format: .pcm16Mono16k,
             pcm16MonoData: Data([1, 2]),
-            isPreRoll: false
+            isPreRoll: false,
+            audioLevel: audioLevel
         )
     }
 }
@@ -153,6 +201,34 @@ private actor PrepareFailingProvider: TranscriptionProvider {
 
     func hasTerminatedResultStream() -> Bool {
         resultStreamTerminated
+    }
+}
+
+private actor SilentFinishingProvider: TranscriptionProvider {
+    nonisolated let mode: TranscriptionMode = .streaming
+    private var continuation: AsyncStream<TranscriptionProviderResult>.Continuation?
+
+    func prepare(config: TranscriptionProviderConfig) async throws {}
+
+    func send(_ frame: VoiceAudioFrame) async throws {}
+
+    func finish() async throws {
+        continuation?.finish()
+    }
+
+    nonisolated func results() -> AsyncStream<TranscriptionProviderResult> {
+        AsyncStream { continuation in
+            Task { await self.setContinuation(continuation) }
+        }
+    }
+
+    func cancel() async {
+        continuation?.finish()
+        continuation = nil
+    }
+
+    private func setContinuation(_ continuation: AsyncStream<TranscriptionProviderResult>.Continuation) {
+        self.continuation = continuation
     }
 }
 

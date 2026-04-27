@@ -11,6 +11,7 @@ public actor VoiceSessionCoordinator {
     private var pendingEvents: [VoiceSessionEvent] = []
     private var pendingEventsFinish = false
     private var metrics = VoiceSessionMetrics()
+    private var terminalProviderResultReceived = false
 
     public init(
         source: any AudioSource,
@@ -40,11 +41,14 @@ public actor VoiceSessionCoordinator {
     public func start(config: TranscriptionProviderConfig) async throws {
         metrics.captureRequestedAtNanos = nowNanos()
         metrics.providerPrepareStartedAtNanos = nowNanos()
+        terminalProviderResultReceived = false
 
         resultTask = Task { [provider] in
             for await result in provider.results() {
                 await self.handleProviderResult(result)
             }
+            guard !Task.isCancelled else { return }
+            self.handleProviderResultStreamEnded()
         }
 
         do {
@@ -80,6 +84,7 @@ public actor VoiceSessionCoordinator {
 
         guard buffer.accept(frame) else { return }
         metrics.lastFrameAcceptedAtNanos = frame.timestampNanos
+        yieldEvent(.audioLevel(frame.audioLevel, metrics))
 
         do {
             try await send(frame)
@@ -138,11 +143,19 @@ public actor VoiceSessionCoordinator {
             }
             yieldEvent(.partial(text, metrics))
         case .final(let text):
+            terminalProviderResultReceived = true
             metrics.finalReceivedAtNanos = nowNanos()
             yieldEvent(.final(text, metrics), finish: true)
         case .failure(let message):
+            terminalProviderResultReceived = true
             yieldEvent(.failed(message, metrics), finish: true)
         }
+    }
+
+    private func handleProviderResultStreamEnded() {
+        guard !terminalProviderResultReceived else { return }
+        terminalProviderResultReceived = true
+        yieldEvent(.failed("Transcription provider ended without a final result.", metrics), finish: true)
     }
 
     private func yieldEvent(_ event: VoiceSessionEvent, finish: Bool = false) {

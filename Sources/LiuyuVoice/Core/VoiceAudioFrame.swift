@@ -6,18 +6,21 @@ public struct VoiceAudioFrame: Sendable, Equatable {
     public let format: VoiceAudioFormat
     public let pcm16MonoData: Data
     public let isPreRoll: Bool
+    public let audioLevel: Float
 
     public init(
         sequence: Int64,
         timestampNanos: Int64,
         format: VoiceAudioFormat,
         pcm16MonoData: Data,
-        isPreRoll: Bool
+        isPreRoll: Bool,
+        audioLevel: Float = 0
     ) {
         self.sequence = sequence
         self.timestampNanos = timestampNanos
         self.format = format
         self.pcm16MonoData = pcm16MonoData
         self.isPreRoll = isPreRoll
+        self.audioLevel = audioLevel
     }
 }

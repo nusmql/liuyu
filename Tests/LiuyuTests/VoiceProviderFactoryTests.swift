@@ -1,0 +1,122 @@
+import XCTest
+import LiuyuVoice
+@testable import LiuyuLib
+
+final class VoiceProviderFactoryTests: XCTestCase {
+    private enum TestError: Error {
+        case primaryFailed
+    }
+
+    func testWhisperMultipartUsesBatchProvider() {
+        let provider = VoiceProviderFactory.makeProvider(
+            params: Self.params(apiFormat: .whisperMultipart),
+            language: nil
+        )
+
+        XCTAssertEqual(provider.mode, .batch)
+    }
+
+    func testChatCompletionsAudioUsesBatchProvider() {
+        let provider = VoiceProviderFactory.makeProvider(
+            params: Self.params(apiFormat: .chatCompletionsAudio),
+            language: "en"
+        )
+
+        XCTAssertEqual(provider.mode, .batch)
+    }
+
+    func testAlibabaRealtimeUsesStreamingProvider() {
+        let provider = VoiceProviderFactory.makeProvider(
+            params: Self.params(apiFormat: .alibabaRealtime),
+            language: nil
+        )
+
+        XCTAssertEqual(provider.mode, .streaming)
+    }
+
+    func testTencentRealtimeFallsBackToBatchProvider() {
+        let provider = VoiceProviderFactory.makeProvider(
+            params: Self.params(apiFormat: .tencentRealtime),
+            language: nil
+        )
+
+        XCTAssertEqual(provider.mode, .batch)
+    }
+
+    func testRESTProviderAttemptsFallbackWithSameAudioWhenPrimaryFails() async throws {
+        let recorder = VoiceProviderAttemptRecorder()
+        let provider = VoiceProviderFactory.makeProvider(
+            params: Self.params(model: "primary", apiFormat: .whisperMultipart),
+            fallback: Self.params(model: "fallback", apiFormat: .chatCompletionsAudio),
+            language: "en",
+            restTranscribe: { data, config, apiFormat in
+                await recorder.record(data: data, config: config, apiFormat: apiFormat)
+                if config.model == "primary" {
+                    throw TestError.primaryFailed
+                }
+                return "fallback text"
+            }
+        )
+
+        try await provider.prepare(config: .init(
+            apiKey: "primary-key",
+            endpoint: "https://primary.example/transcribe",
+            model: "primary",
+            language: "en"
+        ))
+        try await provider.send(Self.frame(sequence: 1))
+
+        let results = provider.results()
+        try await provider.finish()
+
+        var finalText: String?
+        for await result in results {
+            if case .final(let text) = result {
+                finalText = text
+            }
+        }
+
+        let attempts = await recorder.snapshot()
+        XCTAssertEqual(finalText, "fallback text")
+        XCTAssertEqual(attempts.map(\.model), ["primary", "fallback"])
+        XCTAssertEqual(attempts.map(\.apiFormat), [.whisperMultipart, .chatCompletionsAudio])
+        XCTAssertEqual(attempts[0].data, attempts[1].data)
+    }
+
+    private static func params(model: String = "test-model", apiFormat: ApiFormat) -> VoiceProviderFactory.STTParams {
+        (
+            apiKey: "sk-test",
+            endpoint: "https://example.com/v1/audio/transcriptions",
+            model: model,
+            apiFormat: apiFormat
+        )
+    }
+
+    private static func frame(sequence: Int64) -> VoiceAudioFrame {
+        VoiceAudioFrame(
+            sequence: sequence,
+            timestampNanos: sequence,
+            format: .pcm16Mono16k,
+            pcm16MonoData: Data([1, 2]),
+            isPreRoll: false
+        )
+    }
+}
+
+private actor VoiceProviderAttemptRecorder {
+    struct Attempt: Equatable {
+        let data: Data
+        let model: String
+        let apiFormat: ApiFormat
+    }
+
+    private var attempts: [Attempt] = []
+
+    func record(data: Data, config: TranscriptionProviderConfig, apiFormat: ApiFormat) {
+        attempts.append(Attempt(data: data, model: config.model, apiFormat: apiFormat))
+    }
+
+    func snapshot() -> [Attempt] {
+        attempts
+    }
+}
