@@ -6,6 +6,7 @@ import Combine
 
 @MainActor
 public class RecordingController: ObservableObject {
+    // Compatibility wrapper candidate: new voice flows should use LiuyuVoice.MacMicrophoneAudioSource.
     @Published public var audioLevel: Float = 0.0
 
     private var engine: AVAudioEngine?
