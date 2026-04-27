@@ -301,6 +301,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
                     self?.hotkeyManager.configure(shortcut: shortcut)
                 } else {
                     Logger.debug("Shortcut changed to nil (stopping)", category: .hotkey)
+                    // configure() owns hotkey lifecycle; an empty shortcut is invalid, so it stops any active monitor.
                     self?.hotkeyManager.configure(shortcut: RecordedShortcut(flags: [], keyCode: nil, includesFnKey: false))
                 }
             }

@@ -34,6 +34,33 @@ final class TranscriptionServiceTests: XCTestCase {
         return URLSession(configuration: config)
     }
 
+    private enum ResultCollectionError: Error {
+        case timedOut
+    }
+
+    private func collectResults(
+        from stream: AsyncStream<TranscriptionResult>,
+        timeout: Duration = .seconds(1)
+    ) async throws -> [TranscriptionResult] {
+        try await withThrowingTaskGroup(of: [TranscriptionResult].self) { group in
+            group.addTask {
+                var results: [TranscriptionResult] = []
+                for await result in stream {
+                    results.append(result)
+                }
+                return results
+            }
+            group.addTask {
+                try await Task.sleep(for: timeout)
+                throw ResultCollectionError.timedOut
+            }
+
+            let results = try await group.next()!
+            group.cancelAll()
+            return results
+        }
+    }
+
     func testSuccessfulTranscription() async throws {
         MockURLProtocol.handler = { request in
             let response = HTTPURLResponse(
@@ -152,5 +179,31 @@ final class TranscriptionServiceTests: XCTestCase {
         XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer sk-verify")
         let contentType = try XCTUnwrap(request.value(forHTTPHeaderField: "Content-Type"))
         XCTAssertTrue(contentType.contains("multipart/form-data"))
+    }
+
+    func testRESTStrategyBuffersFinalResultBeforeResultsStreamIsSubscribed() async throws {
+        MockURLProtocol.handler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!, statusCode: 200,
+                httpVersion: nil, headerFields: nil
+            )!
+            return (response, #"{"text": "Buffered hello"}"#.data(using: .utf8)!)
+        }
+
+        let strategy = RESTStrategy(apiFormat: .whisperMultipart, session: makeSession())
+        try await strategy.connect(config: TranscriptionConfig(
+            apiKey: "sk-test",
+            endpoint: "https://api.openai.com/v1/audio/transcriptions",
+            model: "whisper-1"
+        ))
+
+        try await strategy.sendAudio(Data([0x00]), isFinal: true)
+
+        let results = try await collectResults(from: strategy.receiveResults())
+
+        XCTAssertEqual(results.count, 1)
+        guard case .final("Buffered hello") = results.first else {
+            return XCTFail("Expected buffered final result, got \(String(describing: results.first))")
+        }
     }
 }
