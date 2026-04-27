@@ -185,6 +185,7 @@ final class VoiceSessionCoordinatorTests: XCTestCase {
         try await source.waitUntilStartRequested()
         try await provider.waitUntilResultsSubscribed()
         await provider.emitFailure("provider failed before source start completed")
+        try await provider.waitUntilCancelled()
         await source.releaseStart()
         try await startTask.value
 
@@ -237,6 +238,46 @@ final class VoiceSessionCoordinatorTests: XCTestCase {
         XCTAssertFalse(prepareCalled)
     }
 
+    func testQueuedProviderFailureDuringThrowingSourceStartPreservesTerminalFailure() async throws {
+        let source = BlockingStartAudioSource(throwsOnStart: true, suspendFirstStop: true)
+        let provider = FailureEmittingProvider()
+        let coordinator = VoiceSessionCoordinator(
+            source: source,
+            provider: provider,
+            configuration: VoiceSessionConfiguration(preRollFrameLimit: 0, tailFrameLimit: 0)
+        )
+        let events = coordinator.events()
+
+        async let collectedEvents = Self.collectEvents(from: events)
+        let startTask = Task {
+            try await coordinator.start(config: .init(apiKey: "key", endpoint: "mock", model: "mock"))
+        }
+
+        try await source.waitUntilStartRequested()
+        try await provider.waitUntilResultsSubscribed()
+        await source.releaseStart()
+        try await source.waitUntilStopRequested()
+        await provider.emitFailure("provider failed while source stop was suspended")
+        try await provider.waitUntilCancelled()
+        await source.releaseStop()
+
+        do {
+            try await startTask.value
+        } catch {
+            XCTFail("Expected queued terminal provider failure to suppress source start error, got \(error)")
+        }
+
+        let eventsResult = try await collectedEvents
+        let failures = eventsResult.compactMap { event -> String? in
+            guard case .failed(let message, _) = event else { return nil }
+            return message
+        }
+        let prepareCalled = await provider.prepareWasCalled()
+
+        XCTAssertEqual(failures, ["provider failed while source stop was suspended"])
+        XCTAssertFalse(prepareCalled)
+    }
+
     func testProviderResultEndDuringSourceStartPreventsPrepareAfterStartReturns() async throws {
         let source = BlockingStartAudioSource()
         let provider = EarlyEndingProvider()
@@ -255,6 +296,7 @@ final class VoiceSessionCoordinatorTests: XCTestCase {
         try await source.waitUntilStartRequested()
         try await provider.waitUntilResultsSubscribed()
         await provider.endResults()
+        try await provider.waitUntilCancelled()
         await source.releaseStart()
         try await startTask.value
 
@@ -294,6 +336,46 @@ final class VoiceSessionCoordinatorTests: XCTestCase {
             try await startTask.value
         } catch {
             XCTFail("Expected terminal provider stream end to suppress source start error, got \(error)")
+        }
+
+        let eventsResult = try await collectedEvents
+        let failures = eventsResult.compactMap { event -> String? in
+            guard case .failed(let message, _) = event else { return nil }
+            return message
+        }
+        let prepareCalled = await provider.prepareWasCalled()
+
+        XCTAssertEqual(failures, ["Transcription provider ended without a final result."])
+        XCTAssertFalse(prepareCalled)
+    }
+
+    func testQueuedProviderResultEndDuringThrowingSourceStartPreservesTerminalFailure() async throws {
+        let source = BlockingStartAudioSource(throwsOnStart: true, suspendFirstStop: true)
+        let provider = EarlyEndingProvider()
+        let coordinator = VoiceSessionCoordinator(
+            source: source,
+            provider: provider,
+            configuration: VoiceSessionConfiguration(preRollFrameLimit: 0, tailFrameLimit: 0)
+        )
+        let events = coordinator.events()
+
+        async let collectedEvents = Self.collectEvents(from: events)
+        let startTask = Task {
+            try await coordinator.start(config: .init(apiKey: "key", endpoint: "mock", model: "mock"))
+        }
+
+        try await source.waitUntilStartRequested()
+        try await provider.waitUntilResultsSubscribed()
+        await source.releaseStart()
+        try await source.waitUntilStopRequested()
+        await provider.endResults()
+        try await provider.waitUntilCancelled()
+        await source.releaseStop()
+
+        do {
+            try await startTask.value
+        } catch {
+            XCTFail("Expected queued terminal provider stream end to suppress source start error, got \(error)")
         }
 
         let eventsResult = try await collectedEvents
@@ -872,6 +954,7 @@ private actor StartYieldingAudioSource: AudioSource {
 
 private actor BlockingStartAudioSource: AudioSource {
     private let throwsOnStart: Bool
+    private let suspendFirstStop: Bool
     private var continuation: AsyncStream<VoiceAudioFrame>.Continuation?
     private var startRequested = false
     private var stopped = false
@@ -879,9 +962,12 @@ private actor BlockingStartAudioSource: AudioSource {
     private var stopCount = 0
     private var startRequestedContinuation: CheckedContinuation<Void, Never>?
     private var releaseStartContinuation: CheckedContinuation<Void, Never>?
+    private var stopRequestedContinuation: CheckedContinuation<Void, Never>?
+    private var releaseStopContinuation: CheckedContinuation<Void, Never>?
 
-    init(throwsOnStart: Bool = false) {
+    init(throwsOnStart: Bool = false, suspendFirstStop: Bool = false) {
         self.throwsOnStart = throwsOnStart
+        self.suspendFirstStop = suspendFirstStop
     }
 
     nonisolated func frames() -> AsyncStream<VoiceAudioFrame> {
@@ -908,8 +994,16 @@ private actor BlockingStartAudioSource: AudioSource {
         stopped = true
         running = false
         stopCount += 1
+        let shouldSuspend = suspendFirstStop && stopCount == 1
         continuation?.finish()
         continuation = nil
+        if shouldSuspend {
+            stopRequestedContinuation?.resume()
+            stopRequestedContinuation = nil
+            await withCheckedContinuation { continuation in
+                releaseStopContinuation = continuation
+            }
+        }
     }
 
     func waitUntilStartRequested() async throws {
@@ -922,6 +1016,18 @@ private actor BlockingStartAudioSource: AudioSource {
     func releaseStart() {
         releaseStartContinuation?.resume()
         releaseStartContinuation = nil
+    }
+
+    func waitUntilStopRequested() async throws {
+        if stopCount > 0 { return }
+        await withCheckedContinuation { continuation in
+            stopRequestedContinuation = continuation
+        }
+    }
+
+    func releaseStop() {
+        releaseStopContinuation?.resume()
+        releaseStopContinuation = nil
     }
 
     func wasStopped() -> Bool {

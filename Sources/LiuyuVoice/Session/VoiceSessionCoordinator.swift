@@ -97,9 +97,11 @@ public actor VoiceSessionCoordinator {
         do {
             try await source.start()
         } catch {
-            let terminalBeforeStartFailure = lifecycleState == .finished || terminalProviderResultReceived
+            var terminalBeforeStartFailure = terminalProviderResultReceived
             await source.stop()
+            terminalBeforeStartFailure = terminalBeforeStartFailure || terminalProviderResultReceived
             await cleanupAfterStartFailure(markFinished: !(terminalBeforeStartFailure || cancelRequested || stopRequested))
+            terminalBeforeStartFailure = terminalBeforeStartFailure || terminalProviderResultReceived
             if terminalBeforeStartFailure {
                 return
             }
