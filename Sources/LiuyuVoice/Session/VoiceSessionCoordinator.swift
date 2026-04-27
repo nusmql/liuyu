@@ -109,6 +109,11 @@ public actor VoiceSessionCoordinator {
             throw error
         }
 
+        if lifecycleState == .finished {
+            await source.stop()
+            return
+        }
+
         if cancelRequested || lifecycleState == .cancelled {
             await stopSourceAndDrainFrames()
             return
@@ -134,6 +139,10 @@ public actor VoiceSessionCoordinator {
                 return
             }
             throw error
+        }
+
+        if lifecycleState == .finished {
+            return
         }
 
         if cancelRequested || lifecycleState == .cancelled {
@@ -167,6 +176,8 @@ public actor VoiceSessionCoordinator {
     }
 
     private func acceptLiveFrame(_ frame: VoiceAudioFrame) async {
+        guard lifecycleState != .finished, lifecycleState != .cancelled else { return }
+
         if metrics.firstFrameCapturedAtNanos == nil {
             metrics.firstFrameCapturedAtNanos = nowNanos()
         }
@@ -185,6 +196,7 @@ public actor VoiceSessionCoordinator {
     }
 
     private func flushBufferedFrames() async throws {
+        guard lifecycleState != .finished, lifecycleState != .cancelled else { return }
         guard providerReady else { return }
 
         if isFlushingBufferedFrames {
@@ -200,7 +212,7 @@ public actor VoiceSessionCoordinator {
 
         do {
             while nextBufferedFrameIndexToSend < buffer.snapshot().count {
-                if cancelRequested || lifecycleState == .cancelled {
+                if cancelRequested || lifecycleState == .cancelled || lifecycleState == .finished {
                     finishCurrentFlush(error: nil)
                     return
                 }
@@ -209,6 +221,11 @@ public actor VoiceSessionCoordinator {
                 let frame = frames[nextBufferedFrameIndexToSend]
                 nextBufferedFrameIndexToSend += 1
                 try await send(frame)
+
+                if lifecycleState == .finished {
+                    finishCurrentFlush(error: nil)
+                    return
+                }
             }
             finishCurrentFlush(error: nil)
         } catch {
@@ -309,6 +326,12 @@ public actor VoiceSessionCoordinator {
         yieldEvent(.cancelled(metrics), finish: true)
     }
 
+    private func stopSourceWithoutDrainingFrames() async {
+        frameTask?.cancel()
+        await source.stop()
+        frameTask = nil
+    }
+
     private func cleanupAfterStartFailure(markFinished: Bool = true) async {
         frameTask?.cancel()
         if let frameTask {
@@ -355,20 +378,25 @@ public actor VoiceSessionCoordinator {
 
         switch result {
         case .partial(let text):
+            guard lifecycleState != .finished else { return }
             if metrics.firstPartialReceivedAtNanos == nil {
                 metrics.firstPartialReceivedAtNanos = nowNanos()
             }
             yieldEvent(.partial(text, metrics))
         case .final(let text):
+            guard lifecycleState != .finished else { return }
             terminalProviderResultReceived = true
             metrics.finalReceivedAtNanos = nowNanos()
             lifecycleState = .finished
-            await stopSourceAndDrainFrames()
+            await stopSourceWithoutDrainingFrames()
+            await provider.cancel()
             yieldEvent(.final(text, metrics), finish: true)
         case .failure(let message):
+            guard lifecycleState != .finished else { return }
             terminalProviderResultReceived = true
             lifecycleState = .finished
-            await stopSourceAndDrainFrames()
+            await stopSourceWithoutDrainingFrames()
+            await provider.cancel()
             yieldEvent(.failed(message, metrics), finish: true)
         }
     }
@@ -377,7 +405,8 @@ public actor VoiceSessionCoordinator {
         guard !terminalProviderResultReceived else { return }
         terminalProviderResultReceived = true
         lifecycleState = .finished
-        await stopSourceAndDrainFrames()
+        await stopSourceWithoutDrainingFrames()
+        await provider.cancel()
         yieldEvent(.failed("Transcription provider ended without a final result.", metrics), finish: true)
     }
 
