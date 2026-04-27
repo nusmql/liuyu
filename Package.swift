@@ -7,10 +7,16 @@ let package = Package(
     dependencies: [
     ],
     targets: [
+        .target(
+            name: "LiuyuVoice",
+            dependencies: [],
+            path: "Sources/LiuyuVoice"
+        ),
         // Library target with all app logic (testable)
         .target(
             name: "LiuyuLib",
             dependencies: [
+                "LiuyuVoice"
             ],
             path: "Sources/LiuyuLib",
             // Resources: explicitly process images, exclude build/metadata files
@@ -33,6 +39,11 @@ let package = Package(
             name: "LiuyuTests",
             dependencies: ["LiuyuLib"],
             path: "Tests/LiuyuTests"
+        ),
+        .testTarget(
+            name: "LiuyuVoiceTests",
+            dependencies: ["LiuyuVoice"],
+            path: "Tests/LiuyuVoiceTests"
         )
     ]
 )
