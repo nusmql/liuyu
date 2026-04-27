@@ -13,8 +13,22 @@ public actor VoiceSessionCoordinator {
     private var metrics = VoiceSessionMetrics()
     private var providerReady = false
     private var stopRequested = false
+    private var cancelRequested = false
     private var providerFinished = false
     private var terminalProviderResultReceived = false
+    private var lifecycleState: LifecycleState = .idle
+    private var nextBufferedFrameIndexToSend = 0
+    private var isFlushingBufferedFrames = false
+
+    private enum LifecycleState {
+        case idle
+        case startingSource
+        case preparingProvider
+        case recording
+        case stopping
+        case cancelled
+        case finished
+    }
 
     public init(
         source: any AudioSource,
@@ -42,12 +56,23 @@ public actor VoiceSessionCoordinator {
     }
 
     public func start(config: TranscriptionProviderConfig) async throws {
+        metrics = VoiceSessionMetrics()
+        buffer = UtteranceBuffer(
+            preRollFrameLimit: configuration.preRollFrameLimit,
+            tailFrameLimit: configuration.tailFrameLimit
+        )
         metrics.captureRequestedAtNanos = nowNanos()
-        metrics.providerPrepareStartedAtNanos = nowNanos()
         providerReady = false
         stopRequested = false
+        cancelRequested = false
         providerFinished = false
         terminalProviderResultReceived = false
+        lifecycleState = .startingSource
+        nextBufferedFrameIndexToSend = 0
+        isFlushingBufferedFrames = false
+
+        let initialPreRoll = buffer.beginUtterance()
+        metrics.preRollFrameCount = initialPreRoll.count
 
         resultTask = Task { [provider] in
             for await result in provider.results() {
@@ -68,38 +93,68 @@ public actor VoiceSessionCoordinator {
         do {
             try await source.start()
         } catch {
-            frameTask?.cancel()
-            if let frameTask {
-                await frameTask.value
+            await cleanupAfterStartFailure()
+            if cancelRequested {
+                return
             }
-            resultTask?.cancel()
-            frameTask = nil
-            resultTask = nil
+            if stopRequested {
+                await failBeforeProviderReady("Recording stopped before audio capture was ready.")
+                return
+            }
             throw error
         }
+
+        if cancelRequested || lifecycleState == .cancelled {
+            return
+        }
+
+        if stopRequested {
+            await failBeforeProviderReady("Recording stopped before audio capture was ready.")
+            return
+        }
+
+        lifecycleState = .preparingProvider
         yieldEvent(.started(metrics))
 
         do {
+            metrics.providerPrepareStartedAtNanos = nowNanos()
             try await provider.prepare(config: config)
         } catch {
             await stopSourceAndDrainFrames()
             resultTask?.cancel()
             resultTask = nil
+            lifecycleState = .finished
+            if cancelRequested || stopRequested {
+                return
+            }
             throw error
         }
+
+        if cancelRequested || lifecycleState == .cancelled {
+            return
+        }
+
         metrics.providerReadyAtNanos = nowNanos()
         providerReady = true
+        lifecycleState = stopRequested ? .stopping : .recording
 
-        let preRoll = buffer.beginUtterance()
-        metrics.preRollFrameCount = preRoll.count
-        for frame in preRoll {
-            try await send(frame)
+        do {
+            try await flushBufferedFrames()
+        } catch {
+            await failProvider(error)
+            return
         }
 
         if stopRequested {
             buffer.requestEnd()
             if !buffer.closed {
                 buffer.forceClose()
+            }
+            do {
+                try await flushBufferedFrames()
+            } catch {
+                await failProvider(error)
+                return
             }
             await finishProvider()
         }
@@ -114,12 +169,29 @@ public actor VoiceSessionCoordinator {
         metrics.lastFrameAcceptedAtNanos = frame.timestampNanos
         yieldEvent(.audioLevel(frame.audioLevel, metrics))
 
-        guard providerReady else { return }
-
         do {
-            try await send(frame)
+            if providerReady {
+                try await flushBufferedFrames()
+            }
         } catch {
-            yieldEvent(.failed(error.localizedDescription, metrics), finish: true)
+            await failProvider(error)
+        }
+    }
+
+    private func flushBufferedFrames() async throws {
+        guard providerReady, !isFlushingBufferedFrames else { return }
+        isFlushingBufferedFrames = true
+        defer { isFlushingBufferedFrames = false }
+
+        while nextBufferedFrameIndexToSend < buffer.snapshot().count {
+            if cancelRequested || lifecycleState == .cancelled {
+                return
+            }
+
+            let frames = buffer.snapshot()
+            let frame = frames[nextBufferedFrameIndexToSend]
+            nextBufferedFrameIndexToSend += 1
+            try await send(frame)
         }
     }
 
@@ -136,7 +208,9 @@ public actor VoiceSessionCoordinator {
 
     public func stop(reason: VoiceSessionStopReason) async {
         metrics.logicalStopAtNanos = nowNanos()
+        guard lifecycleState != .cancelled, lifecycleState != .finished else { return }
         stopRequested = true
+        lifecycleState = .stopping
         await stopSourceAndDrainFrames()
 
         guard providerReady else { return }
@@ -144,6 +218,13 @@ public actor VoiceSessionCoordinator {
         buffer.requestEnd()
         if !buffer.closed {
             buffer.forceClose()
+        }
+
+        do {
+            try await flushBufferedFrames()
+        } catch {
+            await failProvider(error)
+            return
         }
 
         await finishProvider()
@@ -160,30 +241,68 @@ public actor VoiceSessionCoordinator {
 
     private func finishProvider() async {
         guard !providerFinished else { return }
+        guard lifecycleState != .cancelled else { return }
         providerFinished = true
 
         do {
             metrics.finishSentAtNanos = nowNanos()
             try await provider.finish()
         } catch {
-            terminalProviderResultReceived = true
-            yieldEvent(.failed(error.localizedDescription, metrics), finish: true)
+            await failProvider(error)
         }
     }
 
     public func cancel() async {
+        guard lifecycleState != .cancelled, lifecycleState != .finished else { return }
+        cancelRequested = true
+        stopRequested = true
+        lifecycleState = .cancelled
         terminalProviderResultReceived = true
         resultTask?.cancel()
         resultTask = nil
         frameTask?.cancel()
         await source.stop()
+        if let frameTask {
+            await frameTask.value
+        }
         await provider.cancel()
         frameTask = nil
         providerReady = false
         yieldEvent(.cancelled(metrics), finish: true)
     }
 
+    private func cleanupAfterStartFailure() async {
+        frameTask?.cancel()
+        if let frameTask {
+            await frameTask.value
+        }
+        resultTask?.cancel()
+        frameTask = nil
+        resultTask = nil
+        lifecycleState = .finished
+    }
+
+    private func failBeforeProviderReady(_ message: String) async {
+        terminalProviderResultReceived = true
+        lifecycleState = .finished
+        resultTask?.cancel()
+        resultTask = nil
+        await provider.cancel()
+        yieldEvent(.failed(message, metrics), finish: true)
+    }
+
+    private func failProvider(_ error: Error) async {
+        terminalProviderResultReceived = true
+        lifecycleState = .finished
+        resultTask?.cancel()
+        resultTask = nil
+        await provider.cancel()
+        yieldEvent(.failed(error.localizedDescription, metrics), finish: true)
+    }
+
     private func handleProviderResult(_ result: TranscriptionProviderResult) async {
+        guard lifecycleState != .cancelled else { return }
+
         switch result {
         case .partial(let text):
             if metrics.firstPartialReceivedAtNanos == nil {
@@ -193,9 +312,11 @@ public actor VoiceSessionCoordinator {
         case .final(let text):
             terminalProviderResultReceived = true
             metrics.finalReceivedAtNanos = nowNanos()
+            lifecycleState = .finished
             yieldEvent(.final(text, metrics), finish: true)
         case .failure(let message):
             terminalProviderResultReceived = true
+            lifecycleState = .finished
             yieldEvent(.failed(message, metrics), finish: true)
         }
     }
@@ -203,6 +324,7 @@ public actor VoiceSessionCoordinator {
     private func handleProviderResultStreamEnded() {
         guard !terminalProviderResultReceived else { return }
         terminalProviderResultReceived = true
+        lifecycleState = .finished
         yieldEvent(.failed("Transcription provider ended without a final result.", metrics), finish: true)
     }
 
@@ -236,6 +358,6 @@ public actor VoiceSessionCoordinator {
     }
 
     private func nowNanos() -> Int64 {
-        Int64(Date().timeIntervalSince1970 * 1_000_000_000)
+        Int64(DispatchTime.now().uptimeNanoseconds)
     }
 }

@@ -388,7 +388,8 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         voiceEventTask = Task { [weak self, coordinator] in
             for await event in coordinator.events() {
                 await MainActor.run {
-                    self?.handleVoiceSessionEvent(event)
+                    guard let self, self.isCurrentVoiceCoordinator(coordinator) else { return }
+                    self.handleVoiceSessionEvent(event)
                 }
             }
         }
@@ -405,12 +406,17 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             do {
                 try await coordinator.start(config: providerConfig)
                 await MainActor.run {
-                    self?.voiceStartTask = nil
+                    guard let self, self.isCurrentVoiceCoordinator(coordinator) else { return }
+                    self.voiceStartTask = nil
                 }
+            } catch is CancellationError {
+                return
             } catch {
-                Logger.error("Failed to start voice session: \(error.localizedDescription)", category: .audio)
+                if Task.isCancelled { return }
                 await MainActor.run {
-                    self?.handleVoiceStartFailure(error)
+                    guard let self, self.isCurrentVoiceCoordinator(coordinator) else { return }
+                    Logger.error("Failed to start voice session: \(error.localizedDescription)", category: .audio)
+                    self.handleVoiceStartFailure(error)
                 }
             }
         }
@@ -478,6 +484,10 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         Task { await cleanupVoiceSession() }
         panelController.hide()
         recordingState.transition(to: .error(error.localizedDescription), caller: "voice-start-failure")
+    }
+
+    private func isCurrentVoiceCoordinator(_ coordinator: VoiceSessionCoordinator) -> Bool {
+        voiceCoordinator === coordinator
     }
 
     private func clearFinishedVoiceSession() {
