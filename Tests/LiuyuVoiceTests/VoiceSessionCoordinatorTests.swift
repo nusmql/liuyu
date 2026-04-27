@@ -18,6 +18,10 @@ final class VoiceSessionCoordinatorTests: XCTestCase {
         }
     }
 
+    fileprivate enum SourceStartFailure: Error {
+        case failed
+    }
+
     func testStartCancelsResultTaskWhenPrepareFails() async throws {
         let source = FakeAudioSource(frames: [])
         let provider = PrepareFailingProvider()
@@ -195,6 +199,44 @@ final class VoiceSessionCoordinatorTests: XCTestCase {
         XCTAssertFalse(prepareCalled)
     }
 
+    func testProviderFailureDuringThrowingSourceStartPreservesTerminalFailure() async throws {
+        let source = BlockingStartAudioSource(throwsOnStart: true)
+        let provider = FailureEmittingProvider()
+        let coordinator = VoiceSessionCoordinator(
+            source: source,
+            provider: provider,
+            configuration: VoiceSessionConfiguration(preRollFrameLimit: 0, tailFrameLimit: 0)
+        )
+        let events = coordinator.events()
+
+        async let collectedEvents = Self.collectEvents(from: events)
+        let startTask = Task {
+            try await coordinator.start(config: .init(apiKey: "key", endpoint: "mock", model: "mock"))
+        }
+
+        try await source.waitUntilStartRequested()
+        try await provider.waitUntilResultsSubscribed()
+        await provider.emitFailure("provider failed before source start threw")
+        try await provider.waitUntilCancelled()
+        await source.releaseStart()
+
+        do {
+            try await startTask.value
+        } catch {
+            XCTFail("Expected terminal provider failure to suppress source start error, got \(error)")
+        }
+
+        let eventsResult = try await collectedEvents
+        let failures = eventsResult.compactMap { event -> String? in
+            guard case .failed(let message, _) = event else { return nil }
+            return message
+        }
+        let prepareCalled = await provider.prepareWasCalled()
+
+        XCTAssertEqual(failures, ["provider failed before source start threw"])
+        XCTAssertFalse(prepareCalled)
+    }
+
     func testProviderResultEndDuringSourceStartPreventsPrepareAfterStartReturns() async throws {
         let source = BlockingStartAudioSource()
         let provider = EarlyEndingProvider()
@@ -215,6 +257,44 @@ final class VoiceSessionCoordinatorTests: XCTestCase {
         await provider.endResults()
         await source.releaseStart()
         try await startTask.value
+
+        let eventsResult = try await collectedEvents
+        let failures = eventsResult.compactMap { event -> String? in
+            guard case .failed(let message, _) = event else { return nil }
+            return message
+        }
+        let prepareCalled = await provider.prepareWasCalled()
+
+        XCTAssertEqual(failures, ["Transcription provider ended without a final result."])
+        XCTAssertFalse(prepareCalled)
+    }
+
+    func testProviderResultEndDuringThrowingSourceStartPreservesTerminalFailure() async throws {
+        let source = BlockingStartAudioSource(throwsOnStart: true)
+        let provider = EarlyEndingProvider()
+        let coordinator = VoiceSessionCoordinator(
+            source: source,
+            provider: provider,
+            configuration: VoiceSessionConfiguration(preRollFrameLimit: 0, tailFrameLimit: 0)
+        )
+        let events = coordinator.events()
+
+        async let collectedEvents = Self.collectEvents(from: events)
+        let startTask = Task {
+            try await coordinator.start(config: .init(apiKey: "key", endpoint: "mock", model: "mock"))
+        }
+
+        try await source.waitUntilStartRequested()
+        try await provider.waitUntilResultsSubscribed()
+        await provider.endResults()
+        try await provider.waitUntilCancelled()
+        await source.releaseStart()
+
+        do {
+            try await startTask.value
+        } catch {
+            XCTFail("Expected terminal provider stream end to suppress source start error, got \(error)")
+        }
 
         let eventsResult = try await collectedEvents
         let failures = eventsResult.compactMap { event -> String? in
@@ -791,6 +871,7 @@ private actor StartYieldingAudioSource: AudioSource {
 }
 
 private actor BlockingStartAudioSource: AudioSource {
+    private let throwsOnStart: Bool
     private var continuation: AsyncStream<VoiceAudioFrame>.Continuation?
     private var startRequested = false
     private var stopped = false
@@ -798,6 +879,10 @@ private actor BlockingStartAudioSource: AudioSource {
     private var stopCount = 0
     private var startRequestedContinuation: CheckedContinuation<Void, Never>?
     private var releaseStartContinuation: CheckedContinuation<Void, Never>?
+
+    init(throwsOnStart: Bool = false) {
+        self.throwsOnStart = throwsOnStart
+    }
 
     nonisolated func frames() -> AsyncStream<VoiceAudioFrame> {
         AsyncStream { continuation in
@@ -812,6 +897,9 @@ private actor BlockingStartAudioSource: AudioSource {
 
         await withCheckedContinuation { continuation in
             releaseStartContinuation = continuation
+        }
+        if throwsOnStart {
+            throw VoiceSessionCoordinatorTests.SourceStartFailure.failed
         }
         running = true
     }
@@ -1125,6 +1213,7 @@ private actor FailureEmittingProvider: TranscriptionProvider {
     private var resultsSubscribedContinuation: CheckedContinuation<Void, Never>?
     private var prepareCalled = false
     private var cancelled = false
+    private var cancelledContinuation: CheckedContinuation<Void, Never>?
 
     func prepare(config: TranscriptionProviderConfig) async throws {
         prepareCalled = true
@@ -1142,6 +1231,8 @@ private actor FailureEmittingProvider: TranscriptionProvider {
 
     func cancel() async {
         cancelled = true
+        cancelledContinuation?.resume()
+        cancelledContinuation = nil
         continuation?.finish()
         continuation = nil
     }
@@ -1172,6 +1263,13 @@ private actor FailureEmittingProvider: TranscriptionProvider {
     func wasCancelled() -> Bool {
         cancelled
     }
+
+    func waitUntilCancelled() async throws {
+        if cancelled { return }
+        await withCheckedContinuation { continuation in
+            cancelledContinuation = continuation
+        }
+    }
 }
 
 private actor EarlyEndingProvider: TranscriptionProvider {
@@ -1180,6 +1278,8 @@ private actor EarlyEndingProvider: TranscriptionProvider {
     private var resultsSubscribed = false
     private var resultsSubscribedContinuation: CheckedContinuation<Void, Never>?
     private var prepareCalled = false
+    private var cancelled = false
+    private var cancelledContinuation: CheckedContinuation<Void, Never>?
 
     func prepare(config: TranscriptionProviderConfig) async throws {
         prepareCalled = true
@@ -1196,6 +1296,9 @@ private actor EarlyEndingProvider: TranscriptionProvider {
     }
 
     func cancel() async {
+        cancelled = true
+        cancelledContinuation?.resume()
+        cancelledContinuation = nil
         continuation?.finish()
         continuation = nil
     }
@@ -1221,6 +1324,13 @@ private actor EarlyEndingProvider: TranscriptionProvider {
 
     func prepareWasCalled() -> Bool {
         prepareCalled
+    }
+
+    func waitUntilCancelled() async throws {
+        if cancelled { return }
+        await withCheckedContinuation { continuation in
+            cancelledContinuation = continuation
+        }
     }
 }
 
