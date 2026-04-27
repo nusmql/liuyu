@@ -1,6 +1,7 @@
 // Tests/LiuyuTests/DashScopeWebSocketTests.swift
 import XCTest
 @testable import LiuyuLib
+import LiuyuVoice
 
 /// Tests for DashScope WebSocket real-time ASR
 final class DashScopeWebSocketTests: XCTestCase {
@@ -246,5 +247,20 @@ final class DashScopeWebSocketTests: XCTestCase {
 
         XCTAssertEqual(taskId.count, 32)
         XCTAssertFalse(taskId.contains("-"))
+    }
+
+    func testTransportMapsTaskFinishedToLastNonEmptyText() async throws {
+        let input = AsyncStream<TranscriptionResult> { continuation in
+            continuation.yield(.partial("hello"))
+            continuation.yield(.final(""))
+            continuation.finish()
+        }
+
+        var outputs: [TranscriptionProviderResult] = []
+        for await output in AlibabaRealtimeTransport.mapAdapterResults(input) {
+            outputs.append(output)
+        }
+
+        XCTAssertEqual(outputs, [.partial("hello"), .final("hello")])
     }
 }
