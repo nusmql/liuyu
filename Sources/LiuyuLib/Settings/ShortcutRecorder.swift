@@ -8,8 +8,33 @@ import SwiftUI
     /// Called when the recorder begins recording mode.
     func shortcutRecorderDidBeginRecording(_ recorder: ShortcutRecorder)
 
-    /// Called when recording finishes (or is cancelled with nil).
+    /// Called when recording commits a new shortcut or explicit clear commits nil.
     func shortcutRecorder(_ recorder: ShortcutRecorder, didRecord shortcut: RecordedShortcut?)
+
+    /// Called when recording is cancelled without committing a new shortcut.
+    func shortcutRecorderDidCancelRecording(_ recorder: ShortcutRecorder)
+}
+
+public extension ShortcutRecorderDelegate {
+    func shortcutRecorderDidCancelRecording(_ recorder: ShortcutRecorder) {}
+}
+
+struct ShortcutRecorderState {
+    var committed: RecordedShortcut?
+    var draft: RecordedShortcut?
+
+    mutating func begin() {
+        draft = committed
+    }
+
+    mutating func commit(_ shortcut: RecordedShortcut?) {
+        committed = shortcut
+        draft = nil
+    }
+
+    mutating func cancel() {
+        draft = nil
+    }
 }
 
 /// An NSView that allows users to record a keyboard shortcut by pressing modifier keys.
@@ -37,6 +62,7 @@ public class ShortcutRecorder: NSView {
     private let clearButton: NSButton
 
     private var currentShortcut: RecordedShortcut?
+    private var previousShortcut: RecordedShortcut?
 
     // MARK: - Constants
 
@@ -196,6 +222,7 @@ public class ShortcutRecorder: NSView {
 
     private func startRecording() {
         Logger.debug("Start recording", category: .settings)
+        previousShortcut = currentShortcut
         isRecording = true
         currentFlags = []
         accumulatedFlags = []  // Reset accumulated flags
@@ -375,6 +402,7 @@ public class ShortcutRecorder: NSView {
 
         // Notify delegate (updates binding)
         delegate?.shortcutRecorder(self, didRecord: shortcut)
+        previousShortcut = nil
         // Notify system (triggers HotkeyManager start)
         NotificationCenter.default.post(name: .hotkeyRecordingDidEnd, object: self)
     }
@@ -382,12 +410,12 @@ public class ShortcutRecorder: NSView {
     private func cancelRecording() {
         guard isRecording else { return }
 
+        let shortcutToRestore = previousShortcut
         cleanupRecording()
-        updateLabel()
-        updateAppearance()
+        setShortcut(shortcutToRestore)
+        previousShortcut = nil
 
-        // Call delegate first, THEN post notification
-        delegate?.shortcutRecorder(self, didRecord: nil)
+        delegate?.shortcutRecorderDidCancelRecording(self)
         NotificationCenter.default.post(name: .hotkeyRecordingDidEnd, object: self)
     }
 

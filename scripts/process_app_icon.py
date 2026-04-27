@@ -69,10 +69,19 @@ def process_app_icon(input_path, output_path):
 
     # compile with iconutil
     print(f"Compiling .icns to {output_path}...")
+    tmp_output_path = f"{output_path}.tmp.icns"
     try:
-        subprocess.run(["iconutil", "-c", "icns", TEMP_ICONSET_DIR, "-o", output_path], check=True)
+        if os.path.exists(tmp_output_path):
+            os.remove(tmp_output_path)
+        subprocess.run(["iconutil", "-c", "icns", TEMP_ICONSET_DIR, "-o", tmp_output_path], check=True)
+        shutil.move(tmp_output_path, output_path)
         print("Success!")
     except subprocess.CalledProcessError as e:
+        if os.path.exists(tmp_output_path):
+            os.remove(tmp_output_path)
+        if os.path.exists(output_path):
+            print(f"Warning: iconutil failed ({e}); keeping existing {output_path}.")
+            return
         print(f"Error running iconutil: {e}")
         sys.exit(1)
     finally:

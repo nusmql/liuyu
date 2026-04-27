@@ -16,6 +16,8 @@ public actor RESTStrategy: TranscriptionStrategy {
     private var apiFormat: ApiFormat
     private var session: URLSession
     private var continuation: AsyncStream<TranscriptionResult>.Continuation?
+    private var pendingResults: [TranscriptionResult] = []
+    private var pendingFinish = false
 
     public init(
         apiFormat: ApiFormat = .whisperMultipart,
@@ -50,8 +52,7 @@ public actor RESTStrategy: TranscriptionStrategy {
         let resultText = try await executeWithRetry(request: request)
 
         // Yield result through stream
-        continuation?.yield(.final(resultText))
-        continuation?.finish()
+        yieldOrBuffer(.final(resultText), finish: true)
     }
 
     nonisolated public func receiveResults() -> AsyncStream<TranscriptionResult> {
@@ -66,11 +67,43 @@ public actor RESTStrategy: TranscriptionStrategy {
 
     private func setContinuation(_ cont: AsyncStream<TranscriptionResult>.Continuation) {
         self.continuation = cont
+        flushPendingResults()
+    }
+
+    private func yieldOrBuffer(_ result: TranscriptionResult, finish: Bool) {
+        guard let continuation else {
+            pendingResults.append(result)
+            pendingFinish = pendingFinish || finish
+            return
+        }
+
+        continuation.yield(result)
+        if finish {
+            continuation.finish()
+            self.continuation = nil
+        }
+    }
+
+    private func flushPendingResults() {
+        guard let continuation else { return }
+
+        for result in pendingResults {
+            continuation.yield(result)
+        }
+        pendingResults.removeAll()
+
+        if pendingFinish {
+            continuation.finish()
+            pendingFinish = false
+            self.continuation = nil
+        }
     }
 
     public func disconnect() async {
         continuation?.finish()
         continuation = nil
+        pendingResults.removeAll()
+        pendingFinish = false
         config = nil
     }
 

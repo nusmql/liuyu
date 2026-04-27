@@ -148,6 +148,7 @@ final class TranscriptionServiceTests: XCTestCase {
         _ = try await service.transcribe(audioFileURL: tempURL)
 
         let request = try XCTUnwrap(capturedRequest)
+        XCTAssertEqual(request.url?.absoluteString, "https://api.openai.com/v1/audio/transcriptions")
         XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer sk-verify")
         let contentType = try XCTUnwrap(request.value(forHTTPHeaderField: "Content-Type"))
         XCTAssertTrue(contentType.contains("multipart/form-data"))

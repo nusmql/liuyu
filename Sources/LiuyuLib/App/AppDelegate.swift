@@ -202,7 +202,7 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Hotkey
 
     private func applyHotkeyShortcut() {
-        hotkeyManager.shortcut = RecordedShortcut.loadFromDefaults()
+        hotkeyManager.configure(shortcut: RecordedShortcut.loadFromDefaults())
     }
 
     private func startHotkeyManager() {
@@ -298,10 +298,10 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
             .sink { [weak self] notification in
                 if let shortcut = notification.object as? RecordedShortcut {
                     Logger.debug("Shortcut changed to: \(shortcut.displayString)", category: .hotkey)
-                    self?.hotkeyManager.shortcut = shortcut
+                    self?.hotkeyManager.configure(shortcut: shortcut)
                 } else {
                     Logger.debug("Shortcut changed to nil (stopping)", category: .hotkey)
-                    self?.hotkeyManager.stop()
+                    self?.hotkeyManager.configure(shortcut: RecordedShortcut(flags: [], keyCode: nil, includesFnKey: false))
                 }
             }
             .store(in: &cancellables)
@@ -316,7 +316,9 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
                 // Remember if hotkey was active (has valid shortcut)
                 self.wasHotkeyActiveBeforeRecording = self.hotkeyManager.shortcut.isValid
                 // Stop the hotkey manager temporarily
-                self.hotkeyManager.stop()
+                if self.wasHotkeyActiveBeforeRecording {
+                    self.hotkeyManager.stop()
+                }
             }
             .store(in: &cancellables)
 

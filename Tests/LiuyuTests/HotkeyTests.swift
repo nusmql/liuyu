@@ -113,4 +113,79 @@ final class HotkeyTests: XCTestCase {
         let modifierMatchReleased = flagsWhenReleased.intersection(targetFlags) == targetFlags
         XCTAssertFalse(modifierMatchReleased, "No modifier should not match")
     }
+
+    func testModifierOnlyRequiresExactModifiers() {
+        let shortcut = RecordedShortcut(flags: .maskAlternate, keyCode: nil)
+
+        XCTAssertTrue(ShortcutMatcher.matches(
+            cgFlags: .maskAlternate,
+            keyCode: nil,
+            shortcut: shortcut
+        ))
+
+        XCTAssertFalse(ShortcutMatcher.matches(
+            cgFlags: [.maskAlternate, .maskCommand],
+            keyCode: nil,
+            shortcut: shortcut
+        ))
+    }
+
+    func testKeyCombinationRequiresExactModifiersAndKey() {
+        let shortcut = RecordedShortcut(flags: [.maskCommand, .maskShift], keyCode: 15)
+
+        XCTAssertTrue(ShortcutMatcher.matches(
+            cgFlags: [.maskCommand, .maskShift],
+            keyCode: 15,
+            shortcut: shortcut
+        ))
+
+        XCTAssertFalse(ShortcutMatcher.matches(
+            cgFlags: [.maskCommand, .maskShift, .maskAlternate],
+            keyCode: 15,
+            shortcut: shortcut
+        ))
+
+        XCTAssertFalse(ShortcutMatcher.matches(
+            cgFlags: [.maskCommand, .maskShift],
+            keyCode: 16,
+            shortcut: shortcut
+        ))
+    }
+
+    func testFnMustMatchSeparately() {
+        let shortcut = RecordedShortcut(flags: .maskControl, keyCode: nil, includesFnKey: true)
+
+        XCTAssertTrue(ShortcutMatcher.matches(
+            cgFlags: [.maskControl, .maskSecondaryFn],
+            keyCode: nil,
+            shortcut: shortcut
+        ))
+
+        XCTAssertFalse(ShortcutMatcher.matches(
+            cgFlags: .maskControl,
+            keyCode: nil,
+            shortcut: shortcut
+        ))
+    }
+
+    func testShortcutRecordingCancelPreservesCommittedShortcut() {
+        var state = ShortcutRecorderState(committed: .default, draft: nil)
+
+        state.begin()
+        state.cancel()
+
+        XCTAssertEqual(state.committed, .default)
+        XCTAssertNil(state.draft)
+    }
+
+    func testShortcutRecordingCommitReplacesCommittedShortcut() {
+        var state = ShortcutRecorderState(committed: .default, draft: nil)
+        let replacement = RecordedShortcut(flags: [.maskControl, .maskAlternate], keyCode: nil)
+
+        state.begin()
+        state.commit(replacement)
+
+        XCTAssertEqual(state.committed, replacement)
+        XCTAssertNil(state.draft)
+    }
 }

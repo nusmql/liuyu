@@ -32,18 +32,18 @@ struct HotkeySettingsView: View {
                                     .help(warning)
                             }
 
-                            ShortcutRecorderView(shortcut: $shortcut, onBeginRecording: {
-                                self.shortcut = nil
-                                UserDefaults.standard.removeObject(forKey: "recordedShortcut")
-                                // Do NOT manually post .hotkeyShortcutChanged or .hotkeyRecordingDidBegin here.
-                                // ShortcutRecorder already posts .hotkeyRecordingDidBegin.
-                                // And setting self.shortcut = nil triggers .onChange which posts .hotkeyShortcutChanged.
-                            })
+                            ShortcutRecorderView(shortcut: $shortcut)
                                 .frame(width: 140, height: 28)
                                 .onChange(of: shortcut) { newValue in
-                                    checkConflicts(for: newValue)
-                                    newValue?.saveToDefaults()
-                                    NotificationCenter.default.post(name: .hotkeyShortcutChanged, object: newValue)
+                                    if let newValue {
+                                        checkConflicts(for: newValue)
+                                        newValue.saveToDefaults()
+                                        NotificationCenter.default.post(name: .hotkeyShortcutChanged, object: newValue)
+                                    } else {
+                                        conflictWarning = nil
+                                        UserDefaults.standard.removeObject(forKey: "recordedShortcut")
+                                        NotificationCenter.default.post(name: .hotkeyShortcutChanged, object: nil)
+                                    }
                                 }
                         }
                     }
@@ -74,13 +74,16 @@ struct HotkeySettingsView: View {
                                     .help(warning)
                             }
 
-                            ShortcutRecorderView(shortcut: $editVoiceEditShortcut, onBeginRecording: {
-                                self.editVoiceEditShortcut = nil
-                            })
+                            ShortcutRecorderView(shortcut: $editVoiceEditShortcut)
                                 .frame(width: 140, height: 28)
                                 .onChange(of: editVoiceEditShortcut) { newValue in
-                                    checkEditVoiceEditConflicts(for: newValue)
-                                    newValue?.saveEditRecordShortcut()
+                                    if let newValue {
+                                        checkEditVoiceEditConflicts(for: newValue)
+                                        newValue.saveEditRecordShortcut()
+                                    } else {
+                                        editVoiceEditConflictWarning = nil
+                                        UserDefaults.standard.removeObject(forKey: "editRecordShortcut")
+                                    }
                                 }
                         }
                     }
@@ -147,18 +150,26 @@ struct HotkeySettingsView: View {
         }
         .formStyle(.grouped)
         .frame(minWidth: 400, minHeight: 200)
+        .onAppear {
+            checkConflicts(for: shortcut)
+            checkEditVoiceEditConflicts(for: editVoiceEditShortcut)
+        }
     }
 
     private func checkConflicts(for shortcut: RecordedShortcut?) {
-        conflictWarning = systemConflictWarning(for: shortcut)
+        conflictWarning = shortcutWarning(for: shortcut)
     }
 
     private func checkEditVoiceEditConflicts(for shortcut: RecordedShortcut?) {
-        editVoiceEditConflictWarning = systemConflictWarning(for: shortcut)
+        editVoiceEditConflictWarning = shortcutWarning(for: shortcut)
     }
 
-    private func systemConflictWarning(for shortcut: RecordedShortcut?) -> String? {
-        guard let shortcut = shortcut else { return nil }
+    private func shortcutWarning(for shortcut: RecordedShortcut?) -> String? {
+        guard let shortcut, shortcut.isValid else { return nil }
+
+        if shortcut.isModifierOnly && shortcut.flags == .maskAlternate && !shortcut.includesFnKey {
+            return "A single Option key can trigger accidentally. Control+Option is more reliable."
+        }
 
         let modifiers = shortcut.flags.intersection([.maskCommand, .maskAlternate, .maskControl, .maskShift])
 
@@ -168,7 +179,9 @@ struct HotkeySettingsView: View {
             [.maskCommand, .maskShift, .maskControl],
         ]
 
-        return commonSystemShortcuts.contains(where: { $0 == modifiers }) ? "May conflict with system shortcuts" : nil
+        return commonSystemShortcuts.contains(where: { $0 == modifiers })
+            ? "May overlap with common macOS shortcuts."
+            : nil
     }
 }
 

@@ -128,7 +128,8 @@ public final class TranscriptionService: Sendable {
         self.strategy = TranscriptionStrategyFactory.createStrategy(
             provider: provider,
             model: model,
-            apiFormat: apiFormat
+            apiFormat: apiFormat,
+            session: session
         )
     }
 

@@ -12,12 +12,13 @@ public enum TranscriptionStrategyFactory {
     /// - Returns: An appropriate TranscriptionStrategy implementation
     public static func createStrategy(
         provider: ProviderType,
-        apiFormat: ApiFormat
+        apiFormat: ApiFormat,
+        session: URLSession? = nil
     ) -> TranscriptionStrategy {
         switch apiFormat {
         case .whisperMultipart, .chatCompletionsAudio:
             // REST-based providers (OpenAI, Groq, GLM, Alibaba REST)
-            return RESTStrategy(apiFormat: apiFormat.toRESTFormat())
+            return RESTStrategy(apiFormat: apiFormat.toRESTFormat(), session: session)
 
         case .alibabaRealtime:
             // Alibaba Cloud real-time speech recognition via WebSocket
@@ -28,23 +29,24 @@ public enum TranscriptionStrategyFactory {
             // TODO: Implement TencentRealtimeAdapter
             // For now, fall back to REST strategy
             Logger.warning("TencentRealtime not yet implemented, falling back to REST", category: .stt)
-            return RESTStrategy(apiFormat: .whisperMultipart)
+            return RESTStrategy(apiFormat: .whisperMultipart, session: session)
         }
     }
 
     /// Creates a strategy from a provider configuration
     /// - Parameter config: The resolved provider configuration
     /// - Returns: An appropriate TranscriptionStrategy implementation
-    public static func createStrategy(from config: ProviderConfig) -> TranscriptionStrategy {
+    public static func createStrategy(from config: ProviderConfig, session: URLSession? = nil) -> TranscriptionStrategy {
         // Get the provider definition to determine the API format
         guard let definition = ProviderDefinition.catalog[config.provider] else {
             Logger.error("Unknown provider: \(config.provider), using default REST strategy", category: .stt)
-            return RESTStrategy(apiFormat: .whisperMultipart)
+            return RESTStrategy(apiFormat: .whisperMultipart, session: session)
         }
 
         return createStrategy(
             provider: config.provider,
-            apiFormat: definition.sttApiFormat
+            apiFormat: definition.sttApiFormat,
+            session: session
         )
     }
 
@@ -53,11 +55,12 @@ public enum TranscriptionStrategyFactory {
     public static func createStrategy(
         provider: ProviderType,
         model: String,
-        apiFormat: ApiFormat? = nil
+        apiFormat: ApiFormat? = nil,
+        session: URLSession? = nil
     ) -> TranscriptionStrategy {
         // If explicit API format is provided, use it
         if let apiFormat = apiFormat {
-            return createStrategy(provider: provider, apiFormat: apiFormat)
+            return createStrategy(provider: provider, apiFormat: apiFormat, session: session)
         }
 
         // Otherwise, infer from model name
@@ -67,9 +70,9 @@ public enum TranscriptionStrategyFactory {
         default:
             // Fall back to catalog definition
             guard let definition = ProviderDefinition.catalog[provider] else {
-                return RESTStrategy(apiFormat: .whisperMultipart)
+                return RESTStrategy(apiFormat: .whisperMultipart, session: session)
             }
-            return createStrategy(provider: provider, apiFormat: definition.sttApiFormat)
+            return createStrategy(provider: provider, apiFormat: definition.sttApiFormat, session: session)
         }
     }
 }
