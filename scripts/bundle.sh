@@ -62,13 +62,28 @@ find ".build/${BUILD_ARCH}/release" -maxdepth 1 -name "*.bundle" -type d | while
 done
 
 echo "Signing app bundle..."
-# Check for "Liuyu Dev" certificate, fallback to ad-hoc
+ENTITLEMENTS="Sources/LiuyuLib/Resources/Liuyu.entitlements"
+BUNDLE_ID="com.liuyu.app"
+
+sign_app() {
+    local identity="$1"
+    codesign --force --sign "${identity}" --entitlements "${ENTITLEMENTS}" --identifier "${BUNDLE_ID}" "${BUNDLE_DIR}"
+}
+
+# Check for "Liuyu Dev" certificate, but fall back if the signed app does not verify.
 if security find-identity -v -p codesigning | grep -q "Liuyu Dev"; then
-    codesign --force --sign "Liuyu Dev" --entitlements "Sources/LiuyuLib/Resources/Liuyu.entitlements" --identifier "com.liuyu.app" "${BUNDLE_DIR}"
+    if sign_app "Liuyu Dev" && codesign --verify --deep --strict --verbose=2 "${BUNDLE_DIR}"; then
+        echo "Signed with Liuyu Dev"
+    else
+        echo "Warning: Liuyu Dev signing did not verify; falling back to ad-hoc signing"
+        sign_app "-"
+    fi
 else
     echo "Note: Using ad-hoc signing (no 'Liuyu Dev' certificate found)"
-    codesign --force --sign - --entitlements "Sources/LiuyuLib/Resources/Liuyu.entitlements" --identifier "com.liuyu.app" "${BUNDLE_DIR}"
+    sign_app "-"
 fi
+
+codesign --verify --deep --strict --verbose=2 "${BUNDLE_DIR}"
 
 echo "App bundle created at build/${APP_NAME}"
 echo "Run with: open build/${APP_NAME}"
