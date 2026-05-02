@@ -208,6 +208,23 @@ final class ProviderConfigTests: XCTestCase {
         cleanDefaults()
     }
 
+    func testResolveIFlytekStreamingModeUsesIATFormatAndEndpoint() {
+        cleanDefaults()
+        let store = ProviderConfigStore()
+        let pc = ProviderConfig(provider: .iflytek, sttMode: .streaming)
+        store.saveProviders([pc])
+        try? store.saveApiKey("appid|api-key|api-secret", for: pc)
+
+        let result = store.resolveSTT(ModelAssignment(providerID: pc.id, modelId: "iat-api-v2"))
+
+        XCTAssertEqual(result?.apiFormat, .iflytekIAT)
+        XCTAssertEqual(result?.model, "iat-api-v2")
+        XCTAssertEqual(result?.endpoint, "wss://iat-api.xfyun.cn/v2/iat")
+
+        try? store.deleteApiKey(for: pc)
+        cleanDefaults()
+    }
+
     func testResolveLLM() {
         cleanDefaults()
         let store = ProviderConfigStore()

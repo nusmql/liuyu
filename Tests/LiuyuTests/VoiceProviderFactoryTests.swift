@@ -52,6 +52,15 @@ final class VoiceProviderFactoryTests: XCTestCase {
         XCTAssertEqual(provider.mode, .streaming)
     }
 
+    func testIFlytekIATUsesStreamingProvider() {
+        let provider = VoiceProviderFactory.makeProvider(
+            params: Self.params(model: "iat-api-v2", apiFormat: .iflytekIAT),
+            language: nil
+        )
+
+        XCTAssertEqual(provider.mode, .streaming)
+    }
+
     func testTencentRealtimeWithoutFallbackUsesUnsupportedBatchProvider() {
         let provider = VoiceProviderFactory.makeProvider(
             params: Self.params(apiFormat: .tencentRealtime),

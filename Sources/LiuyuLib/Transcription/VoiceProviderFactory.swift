@@ -22,6 +22,11 @@ enum VoiceProviderFactory {
                 transport: AlibabaRealtimeTransport(),
                 chunkFrameLimit: 5
             )
+        case .iflytekIAT:
+            return StreamingTranscriptionProvider(
+                transport: IFlytekIATTransport(),
+                chunkFrameLimit: 1
+            )
         case .whisperMultipart, .glmMultipartEventStream, .chatCompletionsAudio:
             return makeRESTProvider(
                 primary: params,
@@ -118,7 +123,7 @@ enum VoiceProviderFactory {
             return .glmMultipartEventStream
         case .chatCompletionsAudio:
             return .chatCompletionsAudio
-        case .glmRealtime, .alibabaRealtime, .tencentRealtime:
+        case .glmRealtime, .alibabaRealtime, .tencentRealtime, .iflytekIAT:
             return nil
         }
     }
@@ -129,7 +134,7 @@ enum VoiceProviderFactory {
             return "rest-event-stream"
         case .whisperMultipart, .chatCompletionsAudio:
             return "rest"
-        case .glmRealtime, .alibabaRealtime, .tencentRealtime:
+        case .glmRealtime, .alibabaRealtime, .tencentRealtime, .iflytekIAT:
             return "streaming"
         }
     }
@@ -140,7 +145,7 @@ enum VoiceProviderFactory {
             return .streamingResponse
         case .whisperMultipart, .chatCompletionsAudio:
             return .batch
-        case .glmRealtime, .alibabaRealtime, .tencentRealtime:
+        case .glmRealtime, .alibabaRealtime, .tencentRealtime, .iflytekIAT:
             return .streaming
         }
     }

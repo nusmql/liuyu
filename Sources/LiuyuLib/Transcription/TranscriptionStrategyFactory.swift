@@ -27,6 +27,9 @@ public enum TranscriptionStrategyFactory {
             // Alibaba Cloud real-time speech recognition via WebSocket
             return AlibabaRealtimeAdapter()
 
+        case .iflytekIAT:
+            return IFlytekIATAdapter()
+
         case .tencentRealtime:
             // Tencent Cloud real-time speech recognition via WebSocket
             // TODO: Implement TencentRealtimeAdapter
@@ -72,6 +75,8 @@ public enum TranscriptionStrategyFactory {
             return GLMRealtimeAdapter()
         case (.alibaba, "fun-asr-realtime"), (.alibaba, "fun-asr-realtime-2025-11-07"):
             return AlibabaRealtimeAdapter()
+        case (.iflytek, "iat-api-v2"):
+            return IFlytekIATAdapter()
         default:
             // Fall back to catalog definition
             guard let definition = ProviderDefinition.catalog[provider] else {
@@ -93,7 +98,7 @@ private extension ApiFormat {
             return .glmMultipartEventStream
         case .chatCompletionsAudio:
             return .chatCompletionsAudio
-        case .glmRealtime, .alibabaRealtime, .tencentRealtime:
+        case .glmRealtime, .alibabaRealtime, .tencentRealtime, .iflytekIAT:
             // These should not be converted - they're handled separately
             // But if called, default to whisper format
             return .whisperMultipart

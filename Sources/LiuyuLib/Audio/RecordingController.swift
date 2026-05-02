@@ -602,9 +602,9 @@ fileprivate final class AudioState: @unchecked Sendable {
 
     func setStreamingChunkSizeBytes(_ bytes: Int) {
         lock.lock()
-        streamChunkSize = max(3_200, bytes)
+        streamChunkSize = max(1_280, bytes)
         lock.unlock()
-        Logger.info("🎬 [STREAM-CHUNK] chunkSizeBytes=\(max(3_200, bytes))", category: .audio)
+        Logger.info("🎬 [STREAM-CHUNK] chunkSizeBytes=\(max(1_280, bytes))", category: .audio)
     }
 
     /// Called from audio thread on each tap callback.

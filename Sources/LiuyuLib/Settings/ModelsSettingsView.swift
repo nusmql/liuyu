@@ -88,7 +88,7 @@ struct ProvidersSettingsView: View {
                 }
 
                 SecureField("API Key", text: $editingApiKey,
-                            prompt: Text(hasExistingKey ? "Key saved \u{2713}" : "Enter API key"))
+                            prompt: Text(apiKeyPrompt(for: providers[index])))
 
                 TextField("Custom Base URL (optional)", text: Binding(
                     get: { providers[index].baseURL ?? "" },
@@ -155,9 +155,21 @@ struct ProvidersSettingsView: View {
         switch provider {
         case .glm, .alibaba:
             return [.automatic, .rest, .streaming]
+        case .iflytek:
+            return [.automatic, .streaming]
         default:
             return [.automatic, .rest]
         }
+    }
+
+    private func apiKeyPrompt(for provider: ProviderConfig) -> String {
+        if hasExistingKey {
+            return "Key saved \u{2713}"
+        }
+        if provider.provider == .iflytek {
+            return "APPID|APIKey|APISecret or oauth2|APPID|Token"
+        }
+        return "Enter API key"
     }
 
     private func deleteProvider(at index: Int) {

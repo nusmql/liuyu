@@ -98,6 +98,7 @@ final class ModelConfigTests: XCTestCase {
         XCTAssertNotNil(ProviderDefinition.catalog[.glm])
         XCTAssertNotNil(ProviderDefinition.catalog[.deepseek])
         XCTAssertNotNil(ProviderDefinition.catalog[.alibaba])
+        XCTAssertNotNil(ProviderDefinition.catalog[.iflytek])
         XCTAssertNotNil(ProviderDefinition.catalog[.custom])
     }
 
@@ -139,6 +140,14 @@ final class ModelConfigTests: XCTestCase {
         XCTAssertTrue(def.sttModels.contains("qwen3-asr-flash"))
         XCTAssertTrue(def.llmModels.contains("qwen-turbo"))
         XCTAssertEqual(def.sttApiFormat, .chatCompletionsAudio)
+    }
+
+    func testIFlytekProvider() {
+        let def = ProviderDefinition.catalog[.iflytek]!
+        XCTAssertEqual(def.sttEndpoint, "wss://iat-api.xfyun.cn/v2/iat")
+        XCTAssertTrue(def.sttModels.contains("iat-api-v2"))
+        XCTAssertTrue(def.llmModels.isEmpty)
+        XCTAssertEqual(def.sttApiFormat, .iflytekIAT)
     }
 
 }

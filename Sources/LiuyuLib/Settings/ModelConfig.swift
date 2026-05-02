@@ -8,6 +8,7 @@ public enum ProviderType: String, Codable, CaseIterable, Identifiable, Sendable 
     case glm = "GLM (Zhipu)"
     case deepseek = "DeepSeek"
     case alibaba = "Alibaba (Qwen)"
+    case iflytek = "iFLYTEK"
     case custom = "Custom"
 
     public var id: String { rawValue }
@@ -27,6 +28,8 @@ public enum ApiFormat: String, Codable, Sendable {
     case alibabaRealtime
     /// Tencent Cloud real-time speech recognition (WebSocket streaming)
     case tencentRealtime
+    /// iFLYTEK voice dictation streaming WebSocket.
+    case iflytekIAT
 }
 
 public enum STTTransportMode: String, Codable, CaseIterable, Identifiable, Sendable {
@@ -115,6 +118,15 @@ public struct ProviderDefinition: Sendable {
             llmModels: ["qwen-turbo"],
             sttApiFormat: .chatCompletionsAudio,
             apiKeyURL: "https://dashscope.console.aliyun.com/apiKey"
+        ),
+        .iflytek: ProviderDefinition(
+            type: .iflytek,
+            sttEndpoint: "wss://iat-api.xfyun.cn/v2/iat",
+            llmEndpoint: "",
+            sttModels: ["iat-api-v2"],
+            llmModels: [],
+            sttApiFormat: .iflytekIAT,
+            apiKeyURL: "https://console.xfyun.cn/services/iat"
         ),
         .custom: ProviderDefinition(
             type: .custom,
@@ -223,6 +235,9 @@ public final class ModelConfigStore: Sendable {
         } else if endpoint.contains("aliyuncs.com") {
             provider = .alibaba
             modelId = "qwen3-asr-flash"
+        } else if endpoint.contains("xfyun.cn") || endpoint.contains("xf-yun.com") {
+            provider = .iflytek
+            modelId = "iat-api-v2"
         } else {
             provider = .custom
             modelId = "whisper-1"
@@ -453,6 +468,8 @@ private extension ProviderConfigStore {
                     ? assignment.modelId
                     : "fun-asr-realtime"
                 return (model, .alibabaRealtime)
+            case .iflytek:
+                return ("iat-api-v2", .iflytekIAT)
             default:
                 return (assignment.modelId, definition?.sttApiFormat ?? .whisperMultipart)
             }
@@ -471,6 +488,8 @@ private extension ProviderConfigStore {
         switch apiFormat {
         case .glmRealtime:
             return "wss://open.bigmodel.cn/api/paas/v4/realtime"
+        case .iflytekIAT:
+            return "wss://iat-api.xfyun.cn/v2/iat"
         case .whisperMultipart, .glmMultipartEventStream, .chatCompletionsAudio, .alibabaRealtime, .tencentRealtime:
             return definition?.sttEndpoint ?? ""
         }

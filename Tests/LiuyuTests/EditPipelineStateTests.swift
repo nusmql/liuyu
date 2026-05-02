@@ -98,6 +98,11 @@ final class EditPipelineStateTests: XCTestCase {
             apiFormat: .alibabaRealtime,
             language: nil
         ))
+        XCTAssertNil(streamingRESTFallbackParams(
+            apiKey: "key",
+            apiFormat: .iflytekIAT,
+            language: nil
+        ))
     }
 }
 

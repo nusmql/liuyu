@@ -277,6 +277,8 @@ public final class TranscriptionService: Sendable {
             provider = .groq
         } else if endpoint.contains("bigmodel") {
             provider = .glm
+        } else if endpoint.contains("xfyun.cn") || endpoint.contains("xf-yun.com") {
+            provider = .iflytek
         } else {
             provider = .openai
         }

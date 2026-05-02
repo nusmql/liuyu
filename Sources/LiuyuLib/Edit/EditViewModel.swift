@@ -78,7 +78,8 @@ func streamingRESTFallbackParams(
          .glmMultipartEventStream,
          .chatCompletionsAudio,
          .alibabaRealtime,
-         .tencentRealtime:
+         .tencentRealtime,
+         .iflytekIAT:
         return nil
     }
 }
@@ -711,6 +712,10 @@ public class EditViewModel: ObservableObject {
             // fall behind at 10 QPS. Use ~300ms chunks to reduce per-message overhead
             // while keeping end-of-recording backlog bounded.
             return 9_600
+        case .iflytekIAT:
+            // iFLYTEK recommends 40ms PCM chunks, which is 1280 bytes at
+            // 16kHz, 16-bit, mono.
+            return 1_280
         default:
             return 9_600
         }

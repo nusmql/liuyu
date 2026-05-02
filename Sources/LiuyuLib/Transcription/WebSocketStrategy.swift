@@ -224,6 +224,10 @@ public actor WebSocketManager {
         guard let text = String(data: data, encoding: .utf8) else {
             throw TranscriptionError.decodingFailed
         }
+        try await sendText(text)
+    }
+
+    public func sendText(_ text: String) async throws {
         try await webSocketTask?.send(.string(text))
     }
 
