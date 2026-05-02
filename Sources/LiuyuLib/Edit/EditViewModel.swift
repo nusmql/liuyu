@@ -323,9 +323,10 @@ public class EditViewModel: ObservableObject {
     private func streamingChunkSizeBytes(for apiFormat: ApiFormat) -> Int {
         switch apiFormat {
         case .glmRealtime:
-            // GLM Realtime documents 100ms audio frames for realtime input.
-            // 16kHz 16-bit mono PCM is 32,000 bytes/sec, so 3,200 bytes is ~100ms.
-            return 3_200
+            // GLM documents 100ms frames, but measured URLSession/WebSocket sends
+            // fall behind at 10 QPS. Use ~300ms chunks to reduce per-message overhead
+            // while keeping end-of-recording backlog bounded.
+            return 9_600
         default:
             return 9_600
         }

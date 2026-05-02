@@ -151,6 +151,9 @@ public actor StreamingTranscriptionSession {
         defer { isDrainingQueuedChunks = false }
 
         let startDiagnostics = makeDiagnostics()
+        let startSentChunks = totalSentChunks
+        let startSentBytes = totalSentBytes
+        let startSentFinalChunks = totalSentFinalChunks
         let flushStart = Date()
         if startDiagnostics.pendingChunks > 0 {
             Logger.info("[StreamingSession] drain.begin \(startDiagnostics.traceDetails)", category: .stt)
@@ -174,8 +177,11 @@ public actor StreamingTranscriptionSession {
         }
 
         if startDiagnostics.pendingChunks > 0 {
+            let drainedChunks = totalSentChunks - startSentChunks
+            let drainedBytes = totalSentBytes - startSentBytes
+            let drainedFinalChunks = totalSentFinalChunks - startSentFinalChunks
             Logger.info(
-                "[StreamingSession] drain.done duration=\(Self.formatSeconds(Date().timeIntervalSince(flushStart))) \(makeDiagnostics(isDrainingOverride: false).traceDetails)",
+                "[StreamingSession] drain.done duration=\(Self.formatSeconds(Date().timeIntervalSince(flushStart))) drainedChunks=\(drainedChunks) drainedBytes=\(drainedBytes) drainedFinal=\(drainedFinalChunks) \(makeDiagnostics(isDrainingOverride: false).traceDetails)",
                 category: .stt
             )
         }
