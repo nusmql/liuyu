@@ -15,6 +15,7 @@ public class RecordingController: ObservableObject {
     private var converter: AVAudioConverter?
     private var configChangeObserver: NSObjectProtocol?
     private var needsRewarm = false
+    private var warmedInputSampleRate: Double?
 
     // Thread-safe state shared with the audio render thread
     fileprivate let audioState = AudioState()
@@ -142,6 +143,7 @@ public class RecordingController: ObservableObject {
         }
         let converter = AVAudioConverter(from: inputFormat, to: pcmFormat)
         self.converter = converter
+        warmedInputSampleRate = inputFormat.sampleRate
 
         // Install tap that continuously converts audio and feeds AudioState.
         // Delegate to a free function so the closure is NOT @MainActor-isolated.
@@ -163,6 +165,7 @@ public class RecordingController: ObservableObject {
             newEngine.stop()
             self.converter = nil
             self.engine = nil
+            warmedInputSampleRate = nil
             throw RecordingError.engineStartFailed(error)
         }
     }
@@ -175,6 +178,25 @@ public class RecordingController: ObservableObject {
         try warmUp()
     }
 
+    /// Prepare for providers that must begin recording immediately while their
+    /// WebSocket connects. Reuse a stable warmed engine when possible: repeatedly
+    /// rebuilding AVAudioEngine can leave the tap installed but not delivering
+    /// buffers on some devices.
+    public func prepareForImmediateStreamingRecording() throws {
+        if isWarmedUp,
+           engine?.isRunning == true,
+           let warmedInputSampleRate,
+           warmedInputSampleRate <= 32_000 {
+            Logger.info(
+                "Engine reused for immediate streaming inputRate=\(String(format: "%.0f", warmedInputSampleRate))",
+                category: .audio
+            )
+            return
+        }
+
+        try restartWarmUp()
+    }
+
     /// Release the audio engine and microphone.
     public func coolDown() {
         guard isWarmedUp, let engine = engine else { return }
@@ -182,6 +204,7 @@ public class RecordingController: ObservableObject {
         engine.stop()
         converter = nil
         self.engine = nil
+        warmedInputSampleRate = nil
         isWarmedUp = false
         audioState.clear()
         Logger.info("Engine cooled down", category: .audio)

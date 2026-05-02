@@ -748,7 +748,11 @@ public class EditViewModel: ObservableObject {
                 // recording before connecting, but still needs a fresh tap
                 // because a stale launch-time warmup can produce no buffers.
                 trace("streaming.audio.prewarm.begin", token: token, category: .audio)
-                try recordingController.restartWarmUp()
+                if params.apiFormat == .iflytekIAT {
+                    try recordingController.prepareForImmediateStreamingRecording()
+                } else {
+                    try recordingController.restartWarmUp()
+                }
                 trace("streaming.audio.prewarm.ready", token: token, category: .audio)
             }
 
