@@ -126,9 +126,11 @@ final class EditPipelineStateTests: XCTestCase {
         XCTAssertFalse(shouldConnectBeforeAudioCapture(.chatCompletionsAudio))
     }
 
-    func testStopDuringStreamingStartupIsQueuedOnlyWhileIdle() {
+    func testStopDuringStreamingStartupIsQueuedBeforeRecordingBegins() {
         XCTAssertTrue(shouldQueueStreamingStartupStop(editState: .idle, hasStreamingStartup: true))
+        XCTAssertTrue(shouldQueueStreamingStartupStop(editState: .connecting, hasStreamingStartup: true))
         XCTAssertFalse(shouldQueueStreamingStartupStop(editState: .idle, hasStreamingStartup: false))
+        XCTAssertFalse(shouldQueueStreamingStartupStop(editState: .connecting, hasStreamingStartup: false))
         XCTAssertFalse(shouldQueueStreamingStartupStop(editState: .recording(audioLevel: 0), hasStreamingStartup: true))
         XCTAssertFalse(shouldQueueStreamingStartupStop(editState: .transcribing, hasStreamingStartup: true))
         XCTAssertFalse(shouldQueueStreamingStartupStop(editState: .editing, hasStreamingStartup: true))

@@ -4,6 +4,7 @@ import Combine
 
 public enum EditState: Equatable {
     case idle
+    case connecting
     case recording(audioLevel: Float)
     case transcribing
     case editing  // LLM processing
@@ -98,7 +99,12 @@ func shouldConnectBeforeAudioCapture(_ apiFormat: ApiFormat) -> Bool {
 }
 
 func shouldQueueStreamingStartupStop(editState: EditState, hasStreamingStartup: Bool) -> Bool {
-    editState == .idle && hasStreamingStartup
+    switch editState {
+    case .idle, .connecting:
+        return hasStreamingStartup
+    case .recording, .transcribing, .editing:
+        return false
+    }
 }
 
 func pcm16DataFromWAV(_ wavData: Data) -> Data? {
@@ -212,9 +218,9 @@ public class EditViewModel: ObservableObject {
         // When has text, show edit window shortcut for modification
         let shortcut = hasText ? RecordedShortcut.loadEditRecordShortcut() : RecordedShortcut.loadFromDefaults()
         if hasText {
-            return "Hold to Edit (or \(shortcut.displayString))"
+            return "Click to Edit (hold \(shortcut.displayString))"
         } else {
-            return "Hold to Speak (or \(shortcut.displayString))"
+            return "Click to Speak (hold \(shortcut.displayString))"
         }
     }
 
@@ -407,7 +413,7 @@ public class EditViewModel: ObservableObject {
         let feature = providerStore.loadFeatureConfig()
         guard let stt = feature.sttPrimary,
               let params = providerStore.resolveSTT(stt),
-              params.apiFormat == .glmRealtime else {
+              isWebSocketStreamingFormat(params.apiFormat) else {
             return
         }
 
@@ -627,6 +633,7 @@ public class EditViewModel: ObservableObject {
                 trace("stt.resolved", token: traceToken, details: "model=\(params.model) format=\(params.apiFormat.rawValue)")
                 if isWebSocketStreamingFormat(params.apiFormat) {
                     // Use streaming for WebSocket-based providers
+                    editState = .connecting
                     streamingStartupToken = traceToken
                     Task {
                         await startStreamingRecording(params: params, token: traceToken)

@@ -13,17 +13,16 @@ struct EditRecordingControl: View {
         VStack(spacing: 8) {
             content
                 .contentShape(Rectangle())
-                .gesture(
-                    DragGesture(minimumDistance: 0)
-                        .onChanged { _ in
-                            if editState == .idle {
-                                onStartRecording()
-                            }
-                        }
-                        .onEnded { _ in
-                            onStopRecording()
-                        }
-                )
+                .onTapGesture {
+                    switch editState {
+                    case .idle:
+                        onStartRecording()
+                    case .connecting, .recording:
+                        onStopRecording()
+                    case .transcribing, .editing:
+                        break
+                    }
+                }
 
             if let errorMessage {
                 errorView(errorMessage)
@@ -36,6 +35,9 @@ struct EditRecordingControl: View {
         switch editState {
         case .idle:
             micButtonContent
+
+        case .connecting:
+            processingView(text: "Connecting...")
 
         case .recording:
             waveformView
@@ -80,7 +82,7 @@ struct EditRecordingControl: View {
                     .foregroundColor(.white)
             }
 
-            Text("Release to send")
+            Text("Click to send")
                 .foregroundColor(.secondary)
                 .font(.system(size: 12))
         }
