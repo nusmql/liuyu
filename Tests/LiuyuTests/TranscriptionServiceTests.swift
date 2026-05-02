@@ -278,6 +278,47 @@ final class TranscriptionServiceTests: XCTestCase {
         XCTAssertEqual(Set(events.dropFirst().dropLast()), Set(["send:01:audio", "send:02:audio"]))
     }
 
+    func testStreamingSessionReportsQueueDiagnostics() async throws {
+        let strategy = OrderedStreamingStrategy(sendDelay: .milliseconds(1))
+        let session = StreamingTranscriptionSession(
+            strategy: strategy,
+            config: TranscriptionConfig(apiKey: "key", endpoint: "wss://example.test/realtime", model: "test")
+        )
+
+        let audioSend = Task {
+            try await session.sendAudioChunk(Data([0x01, 0x02, 0x03]), isFinal: false)
+        }
+        let finalSend = Task {
+            try await session.sendAudioChunk(Data(), isFinal: true)
+        }
+
+        var queuedDiagnostics = await session.diagnostics()
+        for _ in 0..<10 where queuedDiagnostics.pendingChunks < 2 {
+            try await Task.sleep(for: .milliseconds(5))
+            queuedDiagnostics = await session.diagnostics()
+        }
+
+        XCTAssertFalse(queuedDiagnostics.isConnected)
+        XCTAssertEqual(queuedDiagnostics.pendingChunks, 2)
+        XCTAssertEqual(queuedDiagnostics.pendingBytes, 3)
+        XCTAssertEqual(queuedDiagnostics.pendingFinalChunks, 1)
+        XCTAssertEqual(queuedDiagnostics.totalQueuedChunks, 2)
+        XCTAssertEqual(queuedDiagnostics.totalQueuedBytes, 3)
+        XCTAssertNotNil(queuedDiagnostics.oldestPendingAge)
+
+        try await session.connect()
+        try await audioSend.value
+        try await finalSend.value
+
+        let drainedDiagnostics = await session.diagnostics()
+        XCTAssertTrue(drainedDiagnostics.isConnected)
+        XCTAssertEqual(drainedDiagnostics.pendingChunks, 0)
+        XCTAssertEqual(drainedDiagnostics.pendingBytes, 0)
+        XCTAssertEqual(drainedDiagnostics.totalSentChunks, 2)
+        XCTAssertEqual(drainedDiagnostics.totalSentBytes, 3)
+        XCTAssertEqual(drainedDiagnostics.totalSentFinalChunks, 1)
+    }
+
     private static func requestBodyData(from request: URLRequest) -> Data? {
         if let body = request.httpBody {
             return body

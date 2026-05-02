@@ -304,6 +304,9 @@ public class EditViewModel: ObservableObject {
                 return
             }
             trace("streaming.connected", token: token, category: .stt)
+            if let diagnostics = await streamingSession?.diagnostics() {
+                trace("streaming.queue.afterConnected", token: token, category: .stt, details: diagnostics.traceDetails)
+            }
 
             trace("recording.started.streaming", token: token)
         } catch {
@@ -320,9 +323,9 @@ public class EditViewModel: ObservableObject {
     private func streamingChunkSizeBytes(for apiFormat: ApiFormat) -> Int {
         switch apiFormat {
         case .glmRealtime:
-            // GLM Realtime currently returns final transcription after commit; larger
-            // chunks reduce JSON/base64 WebSocket message overhead and stop-time backlog.
-            return 32_000
+            // GLM Realtime documents 100ms audio frames for realtime input.
+            // 16kHz 16-bit mono PCM is 32,000 bytes/sec, so 3,200 bytes is ~100ms.
+            return 3_200
         default:
             return 9_600
         }
@@ -497,16 +500,29 @@ public class EditViewModel: ObservableObject {
         // Send any flushed data BEFORE sending finish-task
         // This ensures proper ordering: audio data first, then finish signal
         do {
+            if let diagnostics = await streamingSession?.diagnostics() {
+                trace("streaming.queue.beforeFlushSend", token: token, category: .stt, details: diagnostics.traceDetails)
+            }
+
             if let data = flushedData, !data.isEmpty {
                 trace("streaming.flush.send.begin", token: token, category: .stt, details: "bytes=\(data.count)")
                 try await streamingSession?.sendAudioChunk(data, isFinal: false)
                 trace("streaming.flush.send.done", token: token, category: .stt)
+                if let diagnostics = await streamingSession?.diagnostics() {
+                    trace("streaming.queue.afterFlushSend", token: token, category: .stt, details: diagnostics.traceDetails)
+                }
             }
 
             // Now send final chunk to indicate end of stream
+            if let diagnostics = await streamingSession?.diagnostics() {
+                trace("streaming.queue.beforeFinalSend", token: token, category: .stt, details: diagnostics.traceDetails)
+            }
             trace("streaming.final.send.begin", token: token, category: .stt)
             try await streamingSession?.sendAudioChunk(Data(), isFinal: true)
             trace("streaming.final.send.done", token: token, category: .stt)
+            if let diagnostics = await streamingSession?.diagnostics() {
+                trace("streaming.queue.afterFinalSend", token: token, category: .stt, details: diagnostics.traceDetails)
+            }
         } catch {
             Logger.error("Failed to send final chunk: \(error)", category: .stt)
             if guardCurrentTrace(token, stage: "streaming.finish.error") {

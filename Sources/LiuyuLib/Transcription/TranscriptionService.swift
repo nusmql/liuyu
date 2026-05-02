@@ -25,6 +25,29 @@ public enum TranscriptionError: Error, LocalizedError, Sendable {
     }
 }
 
+public struct StreamingQueueDiagnostics: Equatable, Sendable {
+    public let isConnected: Bool
+    public let isDraining: Bool
+    public let pendingChunks: Int
+    public let pendingBytes: Int
+    public let pendingFinalChunks: Int
+    public let totalQueuedChunks: Int
+    public let totalQueuedBytes: Int
+    public let totalSentChunks: Int
+    public let totalSentBytes: Int
+    public let totalSentFinalChunks: Int
+    public let oldestPendingAge: TimeInterval?
+
+    public var traceDetails: String {
+        let oldestAge = oldestPendingAge.map { Self.formatSeconds($0) } ?? "none"
+        return "connected=\(isConnected) draining=\(isDraining) pendingChunks=\(pendingChunks) pendingBytes=\(pendingBytes) pendingFinal=\(pendingFinalChunks) queuedChunks=\(totalQueuedChunks) queuedBytes=\(totalQueuedBytes) sentChunks=\(totalSentChunks) sentBytes=\(totalSentBytes) sentFinal=\(totalSentFinalChunks) oldestPendingAge=\(oldestAge)"
+    }
+
+    private static func formatSeconds(_ value: TimeInterval) -> String {
+        String(format: "%.3fs", value)
+    }
+}
+
 /// Streaming transcription session for real-time audio
 /// Used by WebSocket-based strategies to receive audio chunks as they arrive
 /// This class is an actor to ensure thread-safe access to connection state
@@ -34,10 +57,16 @@ public actor StreamingTranscriptionSession {
     private var isConnected = false
     private var queuedChunks: [QueuedChunk] = []
     private var isDrainingQueuedChunks = false
+    private var totalQueuedChunks = 0
+    private var totalQueuedBytes = 0
+    private var totalSentChunks = 0
+    private var totalSentBytes = 0
+    private var totalSentFinalChunks = 0
 
     private struct QueuedChunk {
         let data: Data
         let isFinal: Bool
+        let queuedAt: Date
         let continuation: CheckedContinuation<Void, Error>
     }
 
@@ -65,7 +94,15 @@ public actor StreamingTranscriptionSession {
     ///   - isFinal: Whether this is the final chunk (end of recording)
     public func sendAudioChunk(_ data: Data, isFinal: Bool) async throws {
         try await withCheckedThrowingContinuation { continuation in
-            queuedChunks.append(QueuedChunk(data: data, isFinal: isFinal, continuation: continuation))
+            queuedChunks.append(QueuedChunk(data: data, isFinal: isFinal, queuedAt: Date(), continuation: continuation))
+            totalQueuedChunks += 1
+            totalQueuedBytes += data.count
+
+            let diagnostics = makeDiagnostics()
+            if shouldLogEnqueue(diagnostics: diagnostics, isFinal: isFinal) {
+                Logger.info("[StreamingSession] queued chunk bytes=\(data.count) final=\(isFinal) \(diagnostics.traceDetails)", category: .stt)
+            }
+
             Task { [weak self] in
                 try? await self?.drainQueuedChunksIfPossible()
             }
@@ -90,6 +127,10 @@ public actor StreamingTranscriptionSession {
     /// Check if the session is currently connected
     public var connected: Bool { isConnected }
 
+    public func diagnostics() -> StreamingQueueDiagnostics {
+        makeDiagnostics()
+    }
+
     /// Set a handler to be called when the WebSocket disconnects unexpectedly
     /// Only applies to WebSocket-based strategies
     public func setDisconnectHandler(_ handler: @Sendable @escaping () -> Void) async {
@@ -109,17 +150,21 @@ public actor StreamingTranscriptionSession {
         isDrainingQueuedChunks = true
         defer { isDrainingQueuedChunks = false }
 
-        let queuedCount = queuedChunks.count
-        let queuedBytes = queuedChunks.reduce(0) { $0 + $1.data.count }
+        let startDiagnostics = makeDiagnostics()
         let flushStart = Date()
-        if queuedCount > 0 {
-            Logger.info("[StreamingSession] flushing queued audio chunks=\(queuedCount) bytes=\(queuedBytes)", category: .stt)
+        if startDiagnostics.pendingChunks > 0 {
+            Logger.info("[StreamingSession] drain.begin \(startDiagnostics.traceDetails)", category: .stt)
         }
 
         while isConnected, !queuedChunks.isEmpty {
             let chunk = queuedChunks.removeFirst()
             do {
                 try await strategy.sendAudio(chunk.data, isFinal: chunk.isFinal)
+                totalSentChunks += 1
+                totalSentBytes += chunk.data.count
+                if chunk.isFinal {
+                    totalSentFinalChunks += 1
+                }
                 chunk.continuation.resume()
             } catch {
                 chunk.continuation.resume(throwing: error)
@@ -128,12 +173,40 @@ public actor StreamingTranscriptionSession {
             }
         }
 
-        if queuedCount > 0 {
+        if startDiagnostics.pendingChunks > 0 {
             Logger.info(
-                "[StreamingSession] queued audio flush done chunks=\(queuedCount) bytes=\(queuedBytes) duration=\(Self.formatSeconds(Date().timeIntervalSince(flushStart)))",
+                "[StreamingSession] drain.done duration=\(Self.formatSeconds(Date().timeIntervalSince(flushStart))) \(makeDiagnostics(isDrainingOverride: false).traceDetails)",
                 category: .stt
             )
         }
+    }
+
+    private func shouldLogEnqueue(diagnostics: StreamingQueueDiagnostics, isFinal: Bool) -> Bool {
+        isFinal
+            || diagnostics.pendingChunks == 1
+            || diagnostics.pendingChunks % 10 == 0
+            || (diagnostics.pendingBytes >= 64_000 && diagnostics.pendingChunks % 5 == 0)
+    }
+
+    private func makeDiagnostics(isDrainingOverride: Bool? = nil) -> StreamingQueueDiagnostics {
+        let now = Date()
+        let pendingBytes = queuedChunks.reduce(0) { $0 + $1.data.count }
+        let pendingFinalChunks = queuedChunks.reduce(0) { $0 + ($1.isFinal ? 1 : 0) }
+        let oldestPendingAge = queuedChunks.first.map { now.timeIntervalSince($0.queuedAt) }
+
+        return StreamingQueueDiagnostics(
+            isConnected: isConnected,
+            isDraining: isDrainingOverride ?? isDrainingQueuedChunks,
+            pendingChunks: queuedChunks.count,
+            pendingBytes: pendingBytes,
+            pendingFinalChunks: pendingFinalChunks,
+            totalQueuedChunks: totalQueuedChunks,
+            totalQueuedBytes: totalQueuedBytes,
+            totalSentChunks: totalSentChunks,
+            totalSentBytes: totalSentBytes,
+            totalSentFinalChunks: totalSentFinalChunks,
+            oldestPendingAge: oldestPendingAge
+        )
     }
 
     private func failQueuedChunks(_ error: Error) {
