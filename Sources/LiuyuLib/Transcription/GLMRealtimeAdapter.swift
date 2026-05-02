@@ -113,11 +113,12 @@ public actor GLMRealtimeAdapter: WebSocketStrategy {
             try await webSocketManager.sendJSON(setupMessage)
         }
 
-        let ready = await waitForTranscriptionSessionReady(timeout: 5)
-        guard ready else {
-            throw TranscriptionError.serverError(500, "GLM Realtime transcription session did not become ready.")
+        let ready = await waitForTranscriptionSessionReady(timeout: 1)
+        if ready {
+            Logger.info("[GLM Realtime] transcription session ready", category: .stt)
+        } else {
+            Logger.warning("[GLM Realtime] transcription session ready event not observed; continuing", category: .stt)
         }
-        Logger.info("[GLM Realtime] transcription session ready", category: .stt)
     }
 
     public func sendAudio(_ data: Data, isFinal: Bool) async throws {
