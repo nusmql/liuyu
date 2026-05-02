@@ -93,6 +93,10 @@ func isWebSocketStreamingFormat(_ apiFormat: ApiFormat) -> Bool {
     }
 }
 
+func shouldConnectBeforeAudioCapture(_ apiFormat: ApiFormat) -> Bool {
+    apiFormat == .iflytekIAT
+}
+
 func pcm16DataFromWAV(_ wavData: Data) -> Data? {
     guard wavData.count >= 12,
           String(decoding: wavData[0..<4], as: UTF8.self) == "RIFF",
@@ -652,6 +656,22 @@ public class EditViewModel: ObservableObject {
         }
 
         do {
+            let connectBeforeAudio = shouldConnectBeforeAudioCapture(params.apiFormat)
+            func connectStreamingSession() async throws -> Bool {
+                let wasConnected = await streamingSession?.connected == true
+                trace(wasConnected ? "streaming.connect.reuse" : "streaming.connect.begin", token: token, category: .stt)
+                try await streamingSession?.connect()
+                guard guardCurrentTrace(token, stage: "streaming.connected") else {
+                    await cleanupStreaming(stopAudio: true)
+                    return false
+                }
+                trace(wasConnected ? "streaming.connected.reused" : "streaming.connected", token: token, category: .stt)
+                if let diagnostics = await streamingSession?.diagnostics() {
+                    trace("streaming.queue.afterConnected", token: token, category: .stt, details: diagnostics.traceDetails)
+                }
+                return true
+            }
+
             let chunkSize = streamingChunkSizeBytes(for: params.apiFormat)
             recordingController.setStreamingChunkSizeBytes(chunkSize)
             trace("streaming.chunk.config", token: token, category: .audio, details: "bytes=\(chunkSize)")
@@ -672,8 +692,15 @@ public class EditViewModel: ObservableObject {
             // STEP 2: Start listening for results before connect so server events are not missed.
             startStreamingResultsListener(token: token)
 
-            // STEP 3: Start recording before connecting to avoid losing speech during
-            // WebSocket setup. Audio chunks are queued by StreamingTranscriptionSession.
+            if connectBeforeAudio {
+                // iFLYTEK requires paced 40ms audio frames. If we buffer during
+                // connect, the backlog cannot catch up, so connect first.
+                guard try await connectStreamingSession() else { return }
+            }
+
+            // STEP 3: Most providers record before connecting to avoid losing
+            // early speech. iFLYTEK connects first because its paced protocol
+            // cannot replay connect-time backlog faster than real time.
             trace("streaming.audio.start.begin", token: token, category: .audio)
             try recordingController.startStreaming(saveToFile: true)
             guard guardCurrentTrace(token, stage: "streaming.audio.started") else {
@@ -685,17 +712,9 @@ public class EditViewModel: ObservableObject {
             editState = .recording(audioLevel: 0)
             startSilenceDetection()
 
-            // STEP 4: Connect to WebSocket while recording is ongoing.
-            let wasConnected = await streamingSession?.connected == true
-            trace(wasConnected ? "streaming.connect.reuse" : "streaming.connect.begin", token: token, category: .stt)
-            try await streamingSession?.connect()
-            guard guardCurrentTrace(token, stage: "streaming.connected") else {
-                await cleanupStreaming(stopAudio: true)
-                return
-            }
-            trace(wasConnected ? "streaming.connected.reused" : "streaming.connected", token: token, category: .stt)
-            if let diagnostics = await streamingSession?.diagnostics() {
-                trace("streaming.queue.afterConnected", token: token, category: .stt, details: diagnostics.traceDetails)
+            if !connectBeforeAudio {
+                // STEP 4: Connect to WebSocket while recording is ongoing.
+                guard try await connectStreamingSession() else { return }
             }
 
             guard case .recording = editState else {

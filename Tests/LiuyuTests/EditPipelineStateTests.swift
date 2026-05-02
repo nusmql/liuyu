@@ -115,6 +115,13 @@ final class EditPipelineStateTests: XCTestCase {
         XCTAssertFalse(isWebSocketStreamingFormat(.glmMultipartEventStream))
         XCTAssertFalse(isWebSocketStreamingFormat(.chatCompletionsAudio))
     }
+
+    func testIFlytekConnectsBeforeAudioCaptureToAvoidPermanentBacklog() {
+        XCTAssertTrue(shouldConnectBeforeAudioCapture(.iflytekIAT))
+        XCTAssertFalse(shouldConnectBeforeAudioCapture(.glmRealtime))
+        XCTAssertFalse(shouldConnectBeforeAudioCapture(.alibabaRealtime))
+        XCTAssertFalse(shouldConnectBeforeAudioCapture(.tencentRealtime))
+    }
 }
 
 private func pcm16Data(repeating sample: Int16, sampleCount: Int) -> Data {
