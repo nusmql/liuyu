@@ -81,6 +81,12 @@ struct ProvidersSettingsView: View {
                     }
                 }
 
+                Picker("STT Mode", selection: $providers[index].sttMode) {
+                    ForEach(sttModeOptions(for: providers[index].provider)) { mode in
+                        Text(mode.displayName).tag(mode)
+                    }
+                }
+
                 SecureField("API Key", text: $editingApiKey,
                             prompt: Text(hasExistingKey ? "Key saved \u{2713}" : "Enter API key"))
 
@@ -143,6 +149,15 @@ struct ProvidersSettingsView: View {
         let provider = ProviderConfig(provider: .openai)
         providers.append(provider)
         selectProvider(provider)
+    }
+
+    private func sttModeOptions(for provider: ProviderType) -> [STTTransportMode] {
+        switch provider {
+        case .glm, .alibaba:
+            return [.automatic, .rest, .streaming]
+        default:
+            return [.automatic, .rest]
+        }
     }
 
     private func deleteProvider(at index: Int) {

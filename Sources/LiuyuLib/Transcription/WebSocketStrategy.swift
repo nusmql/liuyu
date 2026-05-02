@@ -92,6 +92,7 @@ public actor WebSocketManager {
 
     private let buildHeartbeatMessage: @Sendable () -> [String: Any]?
     private let heartbeatInterval: TimeInterval
+    private let connectionTimeout: TimeInterval
     private var webSocketDelegate: WebSocketDelegate?
     private var messageHandler: MessageHandler?
     private var disconnectHandler: DisconnectHandler?
@@ -100,9 +101,11 @@ public actor WebSocketManager {
 
     public init(
         heartbeatInterval: TimeInterval = 30,
+        connectionTimeout: TimeInterval = 3,
         buildHeartbeatMessage: @escaping @Sendable () -> [String: Any]? = { ["type": "ping"] }
     ) {
         self.heartbeatInterval = heartbeatInterval
+        self.connectionTimeout = connectionTimeout
         self.buildHeartbeatMessage = buildHeartbeatMessage
     }
 
@@ -134,7 +137,9 @@ public actor WebSocketManager {
 
         // Create WebSocket task with custom headers
         // Use ephemeral session with delegate to monitor connection state
-        let session = URLSession(configuration: .ephemeral, delegate: delegate, delegateQueue: nil)
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = connectionTimeout
+        let session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
 
         if headers.isEmpty {
             webSocketTask = session.webSocketTask(with: url)
@@ -178,8 +183,13 @@ public actor WebSocketManager {
 
             // Start timeout task
             self.connectionTimeoutTask = Task { [weak self] in
-                try? await Task.sleep(nanoseconds: 3_000_000_000) // 3 seconds
-                await self?.completeConnection(success: false, error: TranscriptionError.networkError("WebSocket connection timeout"))
+                guard let self else { return }
+                let timeout = self.connectionTimeout
+                try? await Task.sleep(for: .seconds(timeout))
+                await self.completeConnection(
+                    success: false,
+                    error: TranscriptionError.networkError("WebSocket connection timeout after \(Int(timeout))s")
+                )
             }
 
             // Start WebSocket connection

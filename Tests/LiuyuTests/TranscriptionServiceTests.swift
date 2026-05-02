@@ -181,6 +181,51 @@ final class TranscriptionServiceTests: XCTestCase {
         XCTAssertTrue(contentType.contains("multipart/form-data"))
     }
 
+    func testGLMEventStreamRequestAndTranscriptDeltas() async throws {
+        var capturedRequest: URLRequest?
+        var capturedBody: Data?
+        MockURLProtocol.handler = { request in
+            capturedRequest = request
+            capturedBody = Self.requestBodyData(from: request)
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "text/event-stream"]
+            )!
+            let stream = """
+            data: {"type":"transcript.text.delta","delta":"你"}
+
+            data: {"type":"transcript.text.delta","delta":"好"}
+
+            data: [DONE]
+
+            """
+            return (response, Data(stream.utf8))
+        }
+
+        let service = TranscriptionService(
+            apiKey: "glm-test",
+            endpoint: "https://open.bigmodel.cn/api/paas/v4/audio/transcriptions",
+            model: "glm-asr-2512",
+            apiFormat: .glmMultipartEventStream,
+            session: makeSession()
+        )
+
+        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("test-\(UUID().uuidString).wav")
+        try Data([0x00]).write(to: tempURL)
+        defer { try? FileManager.default.removeItem(at: tempURL) }
+
+        let result = try await service.transcribe(audioFileURL: tempURL)
+
+        let request = try XCTUnwrap(capturedRequest)
+        let body = try XCTUnwrap(capturedBody)
+        XCTAssertEqual(result, "你好")
+        XCTAssertEqual(request.url?.absoluteString, "https://open.bigmodel.cn/api/paas/v4/audio/transcriptions")
+        XCTAssertNotNil(body.range(of: Data(#"name="stream""#.utf8)))
+        XCTAssertNotNil(body.range(of: Data("true".utf8)))
+    }
+
     func testRESTStrategyBuffersFinalResultBeforeResultsStreamIsSubscribed() async throws {
         MockURLProtocol.handler = { request in
             let response = HTTPURLResponse(
@@ -205,5 +250,32 @@ final class TranscriptionServiceTests: XCTestCase {
         guard case .final("Buffered hello") = results.first else {
             return XCTFail("Expected buffered final result, got \(String(describing: results.first))")
         }
+    }
+
+    private static func requestBodyData(from request: URLRequest) -> Data? {
+        if let body = request.httpBody {
+            return body
+        }
+        guard let stream = request.httpBodyStream else {
+            return nil
+        }
+
+        stream.open()
+        defer { stream.close() }
+
+        var data = Data()
+        let bufferSize = 4096
+        let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: bufferSize)
+        defer { buffer.deallocate() }
+
+        while stream.hasBytesAvailable {
+            let read = stream.read(buffer, maxLength: bufferSize)
+            if read > 0 {
+                data.append(buffer, count: read)
+            } else {
+                break
+            }
+        }
+        return data
     }
 }

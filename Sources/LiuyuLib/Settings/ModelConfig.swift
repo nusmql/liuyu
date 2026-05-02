@@ -17,12 +17,35 @@ public enum ProviderType: String, Codable, CaseIterable, Identifiable, Sendable 
 public enum ApiFormat: String, Codable, Sendable {
     /// OpenAI Whisper-style: multipart/form-data with file, model, language fields.
     case whisperMultipart
+    /// GLM ASR: multipart/form-data upload with stream=true SSE text response.
+    case glmMultipartEventStream
+    /// GLM Realtime WebSocket transcription.
+    case glmRealtime
     /// Chat completions with base64 audio content (e.g. Alibaba Qwen ASR).
     case chatCompletionsAudio
     /// Alibaba Cloud real-time speech recognition (WebSocket streaming)
     case alibabaRealtime
     /// Tencent Cloud real-time speech recognition (WebSocket streaming)
     case tencentRealtime
+}
+
+public enum STTTransportMode: String, Codable, CaseIterable, Identifiable, Sendable {
+    case automatic
+    case rest
+    case streaming
+
+    public var id: String { rawValue }
+
+    public var displayName: String {
+        switch self {
+        case .automatic:
+            return "Automatic"
+        case .rest:
+            return "REST"
+        case .streaming:
+            return "Streaming"
+        }
+    }
 }
 
 public struct ProviderDefinition: Sendable {
@@ -66,7 +89,7 @@ public struct ProviderDefinition: Sendable {
             type: .glm,
             sttEndpoint: "https://open.bigmodel.cn/api/paas/v4/audio/transcriptions",
             llmEndpoint: "https://open.bigmodel.cn/api/paas/v4/chat/completions",
-            sttModels: ["glm-asr-2512"],
+            sttModels: ["glm-asr-2512", "glm-realtime-flash", "glm-realtime-air"],
             llmModels: ["glm-4-flash"],
             sttApiFormat: .whisperMultipart,
             apiKeyURL: "https://open.bigmodel.cn/usercenter/apikeys"
@@ -293,15 +316,9 @@ public final class ProviderConfigStore: Sendable {
             return nil
         }
         let def = ProviderDefinition.catalog[pc.provider]
-        let endpoint = pc.baseURL ?? def?.sttEndpoint ?? ""
-        // Determine apiFormat based on model
-        let format: ApiFormat
-        if assignment.modelId.hasPrefix("fun-asr-realtime") {
-            format = .alibabaRealtime // WebSocket streaming
-        } else {
-            format = def?.sttApiFormat ?? .whisperMultipart
-        }
-        return (key, endpoint, assignment.modelId, format)
+        let resolved = resolveSTTModelAndFormat(provider: pc, assignment: assignment, definition: def)
+        let endpoint = resolveSTTEndpoint(provider: pc, definition: def, apiFormat: resolved.apiFormat)
+        return (key, endpoint, resolved.model, resolved.apiFormat)
     }
 
     /// Resolve LLM params: (apiKey, endpoint, modelId).
@@ -399,19 +416,102 @@ public final class ProviderConfigStore: Sendable {
     }
 }
 
+private extension ProviderConfigStore {
+    func resolveSTTModelAndFormat(
+        provider: ProviderConfig,
+        assignment: ModelAssignment,
+        definition: ProviderDefinition?
+    ) -> (model: String, apiFormat: ApiFormat) {
+        switch provider.sttMode {
+        case .automatic:
+            if provider.provider == .alibaba, assignment.modelId.hasPrefix("fun-asr-realtime") {
+                return (assignment.modelId, .alibabaRealtime)
+            }
+            if provider.provider == .glm, assignment.modelId.hasPrefix("glm-realtime") {
+                return (assignment.modelId, .glmRealtime)
+            }
+            return (assignment.modelId, definition?.sttApiFormat ?? .whisperMultipart)
+
+        case .rest:
+            if provider.provider == .alibaba, assignment.modelId.hasPrefix("fun-asr-realtime") {
+                return ("qwen3-asr-flash", .chatCompletionsAudio)
+            }
+            if provider.provider == .glm, assignment.modelId.hasPrefix("glm-realtime") {
+                return ("glm-asr-2512", definition?.sttApiFormat ?? .whisperMultipart)
+            }
+            return (assignment.modelId, definition?.sttApiFormat ?? .whisperMultipart)
+
+        case .streaming:
+            switch provider.provider {
+            case .glm:
+                let model = assignment.modelId.hasPrefix("glm-realtime")
+                    ? assignment.modelId
+                    : "glm-realtime-flash"
+                return (model, .glmRealtime)
+            case .alibaba:
+                let model = assignment.modelId.hasPrefix("fun-asr-realtime")
+                    ? assignment.modelId
+                    : "fun-asr-realtime"
+                return (model, .alibabaRealtime)
+            default:
+                return (assignment.modelId, definition?.sttApiFormat ?? .whisperMultipart)
+            }
+        }
+    }
+
+    func resolveSTTEndpoint(
+        provider: ProviderConfig,
+        definition: ProviderDefinition?,
+        apiFormat: ApiFormat
+    ) -> String {
+        if let baseURL = provider.baseURL, !baseURL.isEmpty {
+            return baseURL
+        }
+
+        switch apiFormat {
+        case .glmRealtime:
+            return "wss://open.bigmodel.cn/api/paas/v4/realtime"
+        case .whisperMultipart, .glmMultipartEventStream, .chatCompletionsAudio, .alibabaRealtime, .tencentRealtime:
+            return definition?.sttEndpoint ?? ""
+        }
+    }
+}
+
 // MARK: - New Provider-Level Configuration
 
 public struct ProviderConfig: Codable, Identifiable, Equatable, Sendable {
     public var id: UUID
     public var provider: ProviderType
     public var baseURL: String?  // optional override of catalog default
+    public var sttMode: STTTransportMode
 
     public var keychainKey: String { "provider-\(id.uuidString)" }
 
-    public init(id: UUID = UUID(), provider: ProviderType, baseURL: String? = nil) {
+    public init(
+        id: UUID = UUID(),
+        provider: ProviderType,
+        baseURL: String? = nil,
+        sttMode: STTTransportMode = .automatic
+    ) {
         self.id = id
         self.provider = provider
         self.baseURL = baseURL
+        self.sttMode = sttMode
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case provider
+        case baseURL
+        case sttMode
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        provider = try container.decode(ProviderType.self, forKey: .provider)
+        baseURL = try container.decodeIfPresent(String.self, forKey: .baseURL)
+        sttMode = try container.decodeIfPresent(STTTransportMode.self, forKey: .sttMode) ?? .automatic
     }
 }
 

@@ -211,7 +211,7 @@ public class EditViewModel: ObservableObject {
         if let stt = feature.sttPrimary {
             if let params = providerStore.resolveSTT(stt) {
                 trace("stt.resolved", token: traceToken, details: "model=\(params.model) format=\(params.apiFormat.rawValue)")
-                if params.apiFormat == .alibabaRealtime || params.apiFormat == .tencentRealtime {
+                if params.apiFormat == .glmRealtime || params.apiFormat == .alibabaRealtime || params.apiFormat == .tencentRealtime {
                     // Use streaming for WebSocket-based providers
                     Task {
                         await startStreamingRecording(stt: stt, params: params, token: traceToken)
@@ -263,29 +263,8 @@ public class EditViewModel: ObservableObject {
         streamingSession = service.createStreamingSession()
 
         do {
-            // STEP 1: Start recording FIRST to capture all audio
-            // This ensures we don't miss audio during WebSocket connection
-            trace("streaming.audio.start.begin", token: token, category: .audio)
-            try recordingController.startStreaming()
-            guard guardCurrentTrace(token, stage: "streaming.audio.started") else {
-                await cleanupStreaming()
-                return
-            }
-            trace("streaming.audio.started", token: token, category: .audio)
-            recordingStartTime = Date()
-            editState = .recording(audioLevel: 0)
-            startSilenceDetection()
-
-            // STEP 2: Connect to WebSocket while recording is ongoing
-            trace("streaming.connect.begin", token: token, category: .stt)
-            try await streamingSession?.connect()
-            guard guardCurrentTrace(token, stage: "streaming.connected") else {
-                await cleanupStreaming()
-                return
-            }
-            trace("streaming.connected", token: token, category: .stt)
-
-            // STEP 3: Set up streaming handler - this will flush any buffered audio
+            // STEP 1: Register the handler before capture starts. The session buffers
+            // chunks until the WebSocket connection is ready.
             recordingController.setStreamingHandler { [weak self] chunk in
                 Task { [weak self] in
                     do {
@@ -295,10 +274,32 @@ public class EditViewModel: ObservableObject {
                     }
                 }
             }
-            trace("streaming.handler.ready", token: token, category: .audio)
+            trace("streaming.handler.buffering", token: token, category: .audio)
 
-            // STEP 4: Start listening for results
+            // STEP 2: Start listening for results before connect so server events are not missed.
             startStreamingResultsListener(token: token)
+
+            // STEP 3: Start recording before connecting to avoid losing speech during
+            // WebSocket setup. Audio chunks are queued by StreamingTranscriptionSession.
+            trace("streaming.audio.start.begin", token: token, category: .audio)
+            try recordingController.startStreaming()
+            guard guardCurrentTrace(token, stage: "streaming.audio.started") else {
+                await cleanupStreaming(stopAudio: true)
+                return
+            }
+            trace("streaming.audio.started", token: token, category: .audio)
+            recordingStartTime = Date()
+            editState = .recording(audioLevel: 0)
+            startSilenceDetection()
+
+            // STEP 4: Connect to WebSocket while recording is ongoing.
+            trace("streaming.connect.begin", token: token, category: .stt)
+            try await streamingSession?.connect()
+            guard guardCurrentTrace(token, stage: "streaming.connected") else {
+                await cleanupStreaming(stopAudio: true)
+                return
+            }
+            trace("streaming.connected", token: token, category: .stt)
 
             trace("recording.started.streaming", token: token)
         } catch {
@@ -306,8 +307,8 @@ public class EditViewModel: ObservableObject {
             errorMessage = error.localizedDescription
             editState = .idle
             textAtRecordingStart = nil
-            await streamingSession?.disconnect()
-            streamingSession = nil
+            stopSilenceDetection()
+            await cleanupStreaming(stopAudio: true)
             finishTrace("streaming.start.failed", token: token, details: "error=\(error.localizedDescription)")
         }
     }
@@ -405,9 +406,13 @@ public class EditViewModel: ObservableObject {
     }
 
     /// Cleanup streaming resources
-    private func cleanupStreaming() async {
+    private func cleanupStreaming(stopAudio: Bool = false) async {
         streamingTask?.cancel()
         streamingTask = nil
+        if stopAudio {
+            _ = recordingController.stop()
+            recordingController.clearStreamingState()
+        }
         recordingController.setStreamingHandler(nil)
         await streamingSession?.disconnect()
         streamingSession = nil

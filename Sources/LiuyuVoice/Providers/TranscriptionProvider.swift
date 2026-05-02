@@ -2,6 +2,7 @@ import Foundation
 
 public enum TranscriptionMode: Sendable, Equatable {
     case batch
+    case streamingResponse
     case streaming
 }
 

@@ -12,12 +12,17 @@ enum VoiceProviderFactory {
         restTranscribe: @escaping RESTTranscribe = transcribeWithService
     ) -> any TranscriptionProvider {
         switch params.apiFormat {
+        case .glmRealtime:
+            return StreamingTranscriptionProvider(
+                transport: GLMRealtimeTransport(),
+                chunkFrameLimit: 5
+            )
         case .alibabaRealtime:
             return StreamingTranscriptionProvider(
                 transport: AlibabaRealtimeTransport(),
                 chunkFrameLimit: 5
             )
-        case .whisperMultipart, .chatCompletionsAudio:
+        case .whisperMultipart, .glmMultipartEventStream, .chatCompletionsAudio:
             return makeRESTProvider(
                 primary: params,
                 fallback: fallback,
@@ -47,7 +52,10 @@ enum VoiceProviderFactory {
         language: String?,
         restTranscribe: @escaping RESTTranscribe
     ) -> RESTTranscriptionProvider {
-        RESTTranscriptionProvider(modeName: "rest") { wavData, config in
+        RESTTranscriptionProvider(
+            modeName: modeName(for: primary.apiFormat),
+            mode: transcriptionMode(for: primary.apiFormat)
+        ) { wavData, config in
             guard let primaryApiFormat = restApiFormat(for: primary.apiFormat) else {
                 throw TranscriptionError.streamingNotSupported
             }
@@ -106,10 +114,34 @@ enum VoiceProviderFactory {
         switch apiFormat {
         case .whisperMultipart:
             return .whisperMultipart
+        case .glmMultipartEventStream:
+            return .glmMultipartEventStream
         case .chatCompletionsAudio:
             return .chatCompletionsAudio
-        case .alibabaRealtime, .tencentRealtime:
+        case .glmRealtime, .alibabaRealtime, .tencentRealtime:
             return nil
+        }
+    }
+
+    private static func modeName(for apiFormat: ApiFormat) -> String {
+        switch apiFormat {
+        case .glmMultipartEventStream:
+            return "rest-event-stream"
+        case .whisperMultipart, .chatCompletionsAudio:
+            return "rest"
+        case .glmRealtime, .alibabaRealtime, .tencentRealtime:
+            return "streaming"
+        }
+    }
+
+    private static func transcriptionMode(for apiFormat: ApiFormat) -> TranscriptionMode {
+        switch apiFormat {
+        case .glmMultipartEventStream:
+            return .streamingResponse
+        case .whisperMultipart, .chatCompletionsAudio:
+            return .batch
+        case .glmRealtime, .alibabaRealtime, .tencentRealtime:
+            return .streaming
         }
     }
 }

@@ -533,7 +533,9 @@ fileprivate final class AudioState: @unchecked Sendable {
     // input device, so frame count is the stable unit here.
     private let maxPreRollFrames = 16_000
 
-    // Stream chunk size: ~300ms of 16kHz 16-bit mono = 9600 bytes
+    // Stream chunk size: ~300ms of 16kHz 16-bit mono = 9600 bytes.
+    // In practice this keeps WebSocket message overhead low for providers that
+    // only emit final transcription after commit.
     private let streamChunkSize = 9600
 
     var isRecording: Bool {

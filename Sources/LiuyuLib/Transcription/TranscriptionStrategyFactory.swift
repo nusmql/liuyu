@@ -16,9 +16,12 @@ public enum TranscriptionStrategyFactory {
         session: URLSession? = nil
     ) -> TranscriptionStrategy {
         switch apiFormat {
-        case .whisperMultipart, .chatCompletionsAudio:
+        case .whisperMultipart, .glmMultipartEventStream, .chatCompletionsAudio:
             // REST-based providers (OpenAI, Groq, GLM, Alibaba REST)
             return RESTStrategy(apiFormat: apiFormat.toRESTFormat(), session: session)
+
+        case .glmRealtime:
+            return GLMRealtimeAdapter()
 
         case .alibabaRealtime:
             // Alibaba Cloud real-time speech recognition via WebSocket
@@ -65,6 +68,8 @@ public enum TranscriptionStrategyFactory {
 
         // Otherwise, infer from model name
         switch (provider, model) {
+        case (.glm, "glm-realtime"), (.glm, "glm-realtime-flash"), (.glm, "glm-realtime-air"):
+            return GLMRealtimeAdapter()
         case (.alibaba, "fun-asr-realtime"), (.alibaba, "fun-asr-realtime-2025-11-07"):
             return AlibabaRealtimeAdapter()
         default:
@@ -84,9 +89,11 @@ private extension ApiFormat {
         switch self {
         case .whisperMultipart:
             return .whisperMultipart
+        case .glmMultipartEventStream:
+            return .glmMultipartEventStream
         case .chatCompletionsAudio:
             return .chatCompletionsAudio
-        case .alibabaRealtime, .tencentRealtime:
+        case .glmRealtime, .alibabaRealtime, .tencentRealtime:
             // These should not be converted - they're handled separately
             // But if called, default to whisper format
             return .whisperMultipart

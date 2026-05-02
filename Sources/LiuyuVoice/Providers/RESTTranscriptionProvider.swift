@@ -1,7 +1,7 @@
 import Foundation
 
 public actor RESTTranscriptionProvider: TranscriptionProvider {
-    public let mode: TranscriptionMode = .batch
+    public let mode: TranscriptionMode
     public let modeName: String
     private let transcribe: @Sendable (Data, TranscriptionProviderConfig) async throws -> String
     private var config: TranscriptionProviderConfig?
@@ -12,9 +12,11 @@ public actor RESTTranscriptionProvider: TranscriptionProvider {
 
     public init(
         modeName: String,
+        mode: TranscriptionMode = .batch,
         transcribe: @escaping @Sendable (Data, TranscriptionProviderConfig) async throws -> String
     ) {
         self.modeName = modeName
+        self.mode = mode
         self.transcribe = transcribe
     }
 

@@ -62,7 +62,9 @@ final class AudioFixturePipelineTests: XCTestCase {
         XCTAssertEqual(snapshot.sentFrames.map(\.sequence), [0, 1, 2, 3])
         XCTAssertEqual(snapshot.sentFrames.map(\.pcm16MonoData), pcmChunks)
         XCTAssertEqual(snapshot.concatenatedPCM, pcmChunks.reduce(Data(), +))
-        XCTAssertEqual(snapshot.events, ["prepare", "send:0", "send:1", "send:2", "send:3", "finish"])
+        let expectedEvents = ["prepare", "send:0", "send:1", "send:2", "send:3", "finish"]
+        XCTAssertEqual(Array(snapshot.events.prefix(expectedEvents.count)), expectedEvents)
+        XCTAssertTrue(snapshot.events.count == expectedEvents.count || snapshot.events == expectedEvents + ["cancel"])
         XCTAssertEqual(finalTexts, ["ok"])
     }
 

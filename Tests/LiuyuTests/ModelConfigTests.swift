@@ -114,8 +114,15 @@ final class ModelConfigTests: XCTestCase {
         let def = ProviderDefinition.catalog[.glm]!
         XCTAssertTrue(def.sttEndpoint.contains("bigmodel.cn"))
         XCTAssertTrue(def.sttModels.contains("glm-asr-2512"))
+        XCTAssertTrue(def.sttModels.contains("glm-realtime-flash"))
         XCTAssertTrue(def.llmModels.contains("glm-4-flash"))
         XCTAssertEqual(def.sttApiFormat, .whisperMultipart)
+    }
+
+    func testSTTTransportModeLabels() {
+        XCTAssertEqual(STTTransportMode.automatic.displayName, "Automatic")
+        XCTAssertEqual(STTTransportMode.rest.displayName, "REST")
+        XCTAssertEqual(STTTransportMode.streaming.displayName, "Streaming")
     }
 
     func testDeepSeekProvider() {

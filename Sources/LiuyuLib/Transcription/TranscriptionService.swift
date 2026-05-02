@@ -32,6 +32,7 @@ public actor StreamingTranscriptionSession {
     private let strategy: TranscriptionStrategy
     private let config: TranscriptionConfig
     private var isConnected = false
+    private var pendingChunks: [(data: Data, isFinal: Bool)] = []
 
     init(strategy: TranscriptionStrategy, config: TranscriptionConfig) {
         self.strategy = strategy
@@ -43,6 +44,25 @@ public actor StreamingTranscriptionSession {
         guard !isConnected else { return }
         try await strategy.connect(config: config)
         isConnected = true
+
+        let queuedCount = pendingChunks.count
+        let queuedBytes = pendingChunks.reduce(0) { $0 + $1.data.count }
+        let flushStart = Date()
+        if queuedCount > 0 {
+            Logger.info("[StreamingSession] flushing queued audio chunks=\(queuedCount) bytes=\(queuedBytes)", category: .stt)
+        }
+
+        while !pendingChunks.isEmpty {
+            let chunk = pendingChunks.removeFirst()
+            try await strategy.sendAudio(chunk.data, isFinal: chunk.isFinal)
+        }
+
+        if queuedCount > 0 {
+            Logger.info(
+                "[StreamingSession] queued audio flush done chunks=\(queuedCount) bytes=\(queuedBytes) duration=\(Self.formatSeconds(Date().timeIntervalSince(flushStart)))",
+                category: .stt
+            )
+        }
     }
 
     /// Send an audio chunk for real-time transcription
@@ -50,9 +70,11 @@ public actor StreamingTranscriptionSession {
     ///   - data: Audio chunk (typically ~300ms of 16kHz 16-bit PCM)
     ///   - isFinal: Whether this is the final chunk (end of recording)
     public func sendAudioChunk(_ data: Data, isFinal: Bool) async throws {
-        // Note: isConnected is set after connect() completes, but WebSocket-based strategies
-        // buffer data internally until task-started is received, so we allow sending even
-        // if not fully "connected" yet
+        guard isConnected else {
+            pendingChunks.append((data, isFinal))
+            return
+        }
+
         try await strategy.sendAudio(data, isFinal: isFinal)
     }
 
@@ -66,6 +88,7 @@ public actor StreamingTranscriptionSession {
 
     /// Disconnect and cleanup
     public func disconnect() async {
+        pendingChunks.removeAll()
         await strategy.disconnect()
         isConnected = false
     }
@@ -80,6 +103,10 @@ public actor StreamingTranscriptionSession {
         if let wsStrategy = strategy as? any WebSocketStrategy {
             await wsStrategy.setDisconnectHandler(handler)
         }
+    }
+
+    nonisolated private static func formatSeconds(_ value: TimeInterval) -> String {
+        String(format: "%.3fs", value)
     }
 }
 

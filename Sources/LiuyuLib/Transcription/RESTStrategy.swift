@@ -9,12 +9,15 @@ public actor RESTStrategy: TranscriptionStrategy {
 
     public enum ApiFormat: Sendable {
         case whisperMultipart
+        case glmMultipartEventStream
         case chatCompletionsAudio
 
         var logName: String {
             switch self {
             case .whisperMultipart:
                 return "whisperMultipart"
+            case .glmMultipartEventStream:
+                return "glmMultipartEventStream"
             case .chatCompletionsAudio:
                 return "chatCompletionsAudio"
             }
@@ -61,6 +64,8 @@ public actor RESTStrategy: TranscriptionStrategy {
         switch apiFormat {
         case .whisperMultipart:
             request = try buildWhisperRequest(config: config, audioData: data)
+        case .glmMultipartEventStream:
+            request = try buildGLMEventStreamRequest(config: config, audioData: data)
         case .chatCompletionsAudio:
             request = try buildChatCompletionsRequest(config: config, audioData: data)
         }
@@ -70,7 +75,13 @@ public actor RESTStrategy: TranscriptionStrategy {
         )
 
         // Execute request with retry logic
-        let resultText = try await executeWithRetry(request: request, model: config.model)
+        let resultText: String
+        switch apiFormat {
+        case .glmMultipartEventStream:
+            resultText = try await executeEventStreamWithRetry(request: request, model: config.model)
+        case .whisperMultipart, .chatCompletionsAudio:
+            resultText = try await executeWithRetry(request: request, model: config.model)
+        }
         Logger.info(
             "[STT REST] done model=\(config.model) total=\(formatSeconds(Date().timeIntervalSince(totalStart))) chars=\(resultText.count)",
             category: .stt
@@ -174,7 +185,7 @@ public actor RESTStrategy: TranscriptionStrategy {
             let parseStart = Date()
             let text: String
             switch apiFormat {
-            case .whisperMultipart:
+            case .whisperMultipart, .glmMultipartEventStream:
                 text = try parseWhisperResponse(data)
             case .chatCompletionsAudio:
                 text = try parseChatCompletionsResponse(data)
@@ -199,6 +210,86 @@ public actor RESTStrategy: TranscriptionStrategy {
         default:
             let message = parseErrorMessage(data) ?? "Unknown error"
             throw TranscriptionError.serverError(httpResponse.statusCode, message)
+        }
+    }
+
+    private func executeEventStreamWithRetry(request: URLRequest, model: String, retryCount: Int = 0) async throws -> String {
+        let bytes: URLSession.AsyncBytes
+        let response: URLResponse
+        let networkStart = Date()
+
+        do {
+            Logger.info(
+                "[STT REST] eventStream.begin model=\(model) retry=\(retryCount) bodyBytes=\(request.httpBody?.count ?? 0) host=\(hostDescription(request.url?.absoluteString ?? ""))",
+                category: .stt
+            )
+            (bytes, response) = try await session.bytes(for: request)
+        } catch {
+            if retryCount < 1 {
+                Logger.warning(
+                    "[STT REST] eventStream.retry model=\(model) retry=\(retryCount) error=\(error.localizedDescription)",
+                    category: .stt
+                )
+                return try await executeEventStreamWithRetry(request: request, model: model, retryCount: retryCount + 1)
+            }
+            throw TranscriptionError.networkError(error.localizedDescription)
+        }
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw TranscriptionError.decodingFailed
+        }
+
+        Logger.info(
+            "[STT REST] eventStream.headers model=\(model) retry=\(retryCount) status=\(httpResponse.statusCode) duration=\(formatSeconds(Date().timeIntervalSince(networkStart)))",
+            category: .stt
+        )
+
+        switch httpResponse.statusCode {
+        case 200:
+            var transcript = ""
+            var eventCount = 0
+            var firstDeltaLogged = false
+
+            do {
+                for try await line in bytes.lines {
+                    guard let payload = ssePayload(from: line) else { continue }
+                    if payload == "[DONE]" { break }
+                    guard let delta = parseEventStreamText(payload), !delta.isEmpty else { continue }
+                    eventCount += 1
+                    transcript = mergeStreamText(current: transcript, incoming: delta)
+                    if !firstDeltaLogged {
+                        firstDeltaLogged = true
+                        Logger.info(
+                            "[STT REST] eventStream.firstDelta model=\(model) retry=\(retryCount) duration=\(formatSeconds(Date().timeIntervalSince(networkStart))) chars=\(transcript.count)",
+                            category: .stt
+                        )
+                    }
+                    yieldOrBuffer(.partial(transcript), finish: false)
+                }
+            } catch {
+                throw TranscriptionError.networkError(error.localizedDescription)
+            }
+
+            Logger.info(
+                "[STT REST] eventStream.done model=\(model) retry=\(retryCount) status=200 duration=\(formatSeconds(Date().timeIntervalSince(networkStart))) events=\(eventCount) chars=\(transcript.count)",
+                category: .stt
+            )
+
+            guard !transcript.isEmpty else {
+                throw TranscriptionError.noSpeechDetected
+            }
+            return transcript
+
+        case 401:
+            throw TranscriptionError.apiKeyInvalid
+        case 429:
+            if retryCount < 1 {
+                try await Task.sleep(for: .seconds(2))
+                return try await executeEventStreamWithRetry(request: request, model: model, retryCount: retryCount + 1)
+            }
+            throw TranscriptionError.rateLimited
+        default:
+            throw TranscriptionError.serverError(httpResponse.statusCode, "Event stream request failed.")
         }
     }
 
@@ -234,11 +325,28 @@ public actor RESTStrategy: TranscriptionStrategy {
         return request
     }
 
+    private func buildGLMEventStreamRequest(config: TranscriptionConfig, audioData: Data) throws -> URLRequest {
+        let boundary = UUID().uuidString
+        var request = URLRequest(url: URL(string: config.endpoint)!)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(config.apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        request.httpBody = buildMultipartBody(
+            audioData: audioData,
+            boundary: boundary,
+            model: config.model,
+            language: config.language,
+            stream: true
+        )
+        return request
+    }
+
     private func buildMultipartBody(
         audioData: Data,
         boundary: String,
         model: String,
-        language: String?
+        language: String?,
+        stream: Bool = false
     ) -> Data {
         var body = Data()
         let filename = "audio.wav"
@@ -247,6 +355,9 @@ public actor RESTStrategy: TranscriptionStrategy {
         body.appendMultipart(boundary: boundary, name: "file", filename: filename,
                              contentType: contentType, data: audioData)
         body.appendMultipart(boundary: boundary, name: "model", value: model)
+        if stream {
+            body.appendMultipart(boundary: boundary, name: "stream", value: "true")
+        }
         if let language = language {
             body.appendMultipart(boundary: boundary, name: "language", value: language)
         }
@@ -254,6 +365,49 @@ public actor RESTStrategy: TranscriptionStrategy {
         body.append("--\(boundary)--\r\n".data(using: .utf8)!)
 
         return body
+    }
+
+    private func ssePayload(from line: String) -> String? {
+        guard line.hasPrefix("data:") else { return nil }
+        return String(line.dropFirst("data:".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func parseEventStreamText(_ payload: String) -> String? {
+        guard let data = payload.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+
+        if let type = json["type"] as? String,
+           type == "transcript.text.delta",
+           let delta = json["delta"] as? String {
+            return delta
+        }
+
+        if let text = json["text"] as? String {
+            return text
+        }
+
+        if let choices = json["choices"] as? [[String: Any]],
+           let first = choices.first {
+            if let delta = first["delta"] as? [String: Any],
+               let content = delta["content"] as? String {
+                return content
+            }
+            if let message = first["message"] as? [String: Any],
+               let content = message["content"] as? String {
+                return content
+            }
+        }
+
+        return nil
+    }
+
+    private func mergeStreamText(current: String, incoming: String) -> String {
+        if incoming.hasPrefix(current) {
+            return incoming
+        }
+        return current + incoming
     }
 
     private func parseWhisperResponse(_ data: Data) throws -> String {
