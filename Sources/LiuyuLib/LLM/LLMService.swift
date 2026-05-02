@@ -26,6 +26,11 @@ public final class LLMService: Sendable {
     public let endpoint: String
     public let model: String
     private let session: URLSession
+    private static let sharedSession: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 60
+        return URLSession(configuration: config)
+    }()
 
     public init(
         apiKey: String,
@@ -36,21 +41,20 @@ public final class LLMService: Sendable {
         self.apiKey = apiKey
         self.endpoint = endpoint
         self.model = model
-        self.session = session ?? {
-            let config = URLSessionConfiguration.default
-            config.timeoutIntervalForRequest = 60
-            return URLSession(configuration: config)
-        }()
+        self.session = session ?? Self.sharedSession
     }
 
     public func chat(system: String, user: String, retryCount: Int = 0) async throws -> String {
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "model": model,
             "messages": [
                 ["role": "system", "content": system],
                 ["role": "user", "content": user]
             ]
         ]
+        if disablesDeepSeekThinkingByDefault {
+            body["thinking"] = ["type": "disabled"]
+        }
 
         var request = URLRequest(url: URL(string: endpoint)!)
         request.httpMethod = "POST"
@@ -111,5 +115,13 @@ public final class LLMService: Sendable {
             return nil
         }
         return message
+    }
+
+    private var disablesDeepSeekThinkingByDefault: Bool {
+        guard model.hasPrefix("deepseek-v4"),
+              let host = URL(string: endpoint)?.host?.lowercased() else {
+            return false
+        }
+        return host == "api.deepseek.com" || host.hasSuffix(".deepseek.com")
     }
 }

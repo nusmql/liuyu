@@ -51,6 +51,7 @@ final class ProviderConfigTests: XCTestCase {
         UserDefaults.standard.removeObject(forKey: "providerConfigs")
         UserDefaults.standard.removeObject(forKey: "featureConfig")
         UserDefaults.standard.removeObject(forKey: "providerMigrationDone")
+        UserDefaults.standard.removeObject(forKey: "deepseekDefaultLLMMigrationDone")
     }
 
     func testSaveAndLoadProviders() {
@@ -166,6 +167,50 @@ final class ProviderConfigTests: XCTestCase {
         try? newStore.deleteApiKey(for: providers[0])
         try? oldStore.deleteApiKey(for: oldConfig)
         UserDefaults.standard.removeObject(forKey: "modelConfigs")
+        cleanDefaults()
+    }
+
+    func testEnsureDefaultLLMUsesDeepSeekWhenMissing() {
+        cleanDefaults()
+        let store = ProviderConfigStore()
+
+        store.ensurePreferredDefaultLLMIfNeeded()
+
+        let providers = store.loadProviders()
+        let deepSeek = providers.first(where: { $0.provider == .deepseek })
+        XCTAssertNotNil(deepSeek)
+
+        let feature = store.loadFeatureConfig()
+        XCTAssertEqual(feature.llmPrimary?.providerID, deepSeek?.id)
+        XCTAssertEqual(feature.llmPrimary?.modelId, "deepseek-v4-flash")
+        cleanDefaults()
+    }
+
+    func testEnsureDefaultLLMReplacesLegacyGLMFlashDefaultOnce() {
+        cleanDefaults()
+        let store = ProviderConfigStore()
+        let glm = ProviderConfig(provider: .glm)
+        store.saveProviders([glm])
+        store.saveFeatureConfig(FeatureConfig(
+            llmPrimary: ModelAssignment(providerID: glm.id, modelId: "glm-4-flash")
+        ))
+
+        store.ensurePreferredDefaultLLMIfNeeded()
+
+        let providers = store.loadProviders()
+        XCTAssertTrue(providers.contains { $0.provider == .glm })
+        let deepSeek = providers.first(where: { $0.provider == .deepseek })
+        XCTAssertNotNil(deepSeek)
+
+        let feature = store.loadFeatureConfig()
+        XCTAssertEqual(feature.llmPrimary?.providerID, deepSeek?.id)
+        XCTAssertEqual(feature.llmPrimary?.modelId, "deepseek-v4-flash")
+
+        store.saveFeatureConfig(FeatureConfig(
+            llmPrimary: ModelAssignment(providerID: glm.id, modelId: "glm-4-flash")
+        ))
+        store.ensurePreferredDefaultLLMIfNeeded()
+        XCTAssertEqual(store.loadFeatureConfig().llmPrimary?.providerID, glm.id)
         cleanDefaults()
     }
 }

@@ -10,6 +10,15 @@ public actor RESTStrategy: TranscriptionStrategy {
     public enum ApiFormat: Sendable {
         case whisperMultipart
         case chatCompletionsAudio
+
+        var logName: String {
+            switch self {
+            case .whisperMultipart:
+                return "whisperMultipart"
+            case .chatCompletionsAudio:
+                return "chatCompletionsAudio"
+            }
+        }
     }
 
     private var config: TranscriptionConfig?
@@ -18,17 +27,18 @@ public actor RESTStrategy: TranscriptionStrategy {
     private var continuation: AsyncStream<TranscriptionResult>.Continuation?
     private var pendingResults: [TranscriptionResult] = []
     private var pendingFinish = false
+    private static let sharedSession: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 30
+        return URLSession(configuration: config)
+    }()
 
     public init(
         apiFormat: ApiFormat = .whisperMultipart,
         session: URLSession? = nil
     ) {
         self.apiFormat = apiFormat
-        self.session = session ?? {
-            let config = URLSessionConfiguration.default
-            config.timeoutIntervalForRequest = 30
-            return URLSession(configuration: config)
-        }()
+        self.session = session ?? Self.sharedSession
     }
 
     public func connect(config: TranscriptionConfig) async throws {
@@ -40,6 +50,13 @@ public actor RESTStrategy: TranscriptionStrategy {
             throw TranscriptionError.apiKeyMissing
         }
 
+        let totalStart = Date()
+        Logger.info(
+            "[STT REST] begin model=\(config.model) format=\(apiFormat.logName) audioBytes=\(data.count) estimatedAudio=\(estimatedPCM16MonoDuration(data.count)) host=\(hostDescription(config.endpoint))",
+            category: .stt
+        )
+
+        let buildStart = Date()
         let request: URLRequest
         switch apiFormat {
         case .whisperMultipart:
@@ -47,9 +64,17 @@ public actor RESTStrategy: TranscriptionStrategy {
         case .chatCompletionsAudio:
             request = try buildChatCompletionsRequest(config: config, audioData: data)
         }
+        Logger.info(
+            "[STT REST] request.built model=\(config.model) bodyBytes=\(request.httpBody?.count ?? 0) build=\(formatSeconds(Date().timeIntervalSince(buildStart)))",
+            category: .stt
+        )
 
         // Execute request with retry logic
-        let resultText = try await executeWithRetry(request: request)
+        let resultText = try await executeWithRetry(request: request, model: config.model)
+        Logger.info(
+            "[STT REST] done model=\(config.model) total=\(formatSeconds(Date().timeIntervalSince(totalStart))) chars=\(resultText.count)",
+            category: .stt
+        )
 
         // Yield result through stream
         yieldOrBuffer(.final(resultText), finish: true)
@@ -109,43 +134,87 @@ public actor RESTStrategy: TranscriptionStrategy {
 
     // MARK: - Private Methods
 
-    private func executeWithRetry(request: URLRequest, retryCount: Int = 0) async throws -> String {
+    private func executeWithRetry(request: URLRequest, model: String, retryCount: Int = 0) async throws -> String {
         let data: Data
         let response: URLResponse
+        let networkStart = Date()
 
         do {
+            Logger.info(
+                "[STT REST] network.begin model=\(model) retry=\(retryCount) bodyBytes=\(request.httpBody?.count ?? 0) host=\(hostDescription(request.url?.absoluteString ?? ""))",
+                category: .stt
+            )
             (data, response) = try await session.data(for: request)
         } catch {
             if retryCount < 1 {
-                return try await executeWithRetry(request: request, retryCount: retryCount + 1)
+                Logger.warning(
+                    "[STT REST] network.retry model=\(model) retry=\(retryCount) error=\(error.localizedDescription)",
+                    category: .stt
+                )
+                return try await executeWithRetry(request: request, model: model, retryCount: retryCount + 1)
             }
+            Logger.error(
+                "[STT REST] network.failed model=\(model) retry=\(retryCount) duration=\(formatSeconds(Date().timeIntervalSince(networkStart))) error=\(error.localizedDescription)",
+                category: .stt
+            )
             throw TranscriptionError.networkError(error.localizedDescription)
         }
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw TranscriptionError.decodingFailed
         }
+        let networkDuration = Date().timeIntervalSince(networkStart)
+        Logger.info(
+            "[STT REST] network.done model=\(model) retry=\(retryCount) status=\(httpResponse.statusCode) duration=\(formatSeconds(networkDuration)) responseBytes=\(data.count)",
+            category: .stt
+        )
 
         switch httpResponse.statusCode {
         case 200:
+            let parseStart = Date()
+            let text: String
             switch apiFormat {
             case .whisperMultipart:
-                return try parseWhisperResponse(data)
+                text = try parseWhisperResponse(data)
             case .chatCompletionsAudio:
-                return try parseChatCompletionsResponse(data)
+                text = try parseChatCompletionsResponse(data)
             }
+            Logger.info(
+                "[STT REST] parse.done model=\(model) duration=\(formatSeconds(Date().timeIntervalSince(parseStart))) chars=\(text.count)",
+                category: .stt
+            )
+            return text
         case 401:
             throw TranscriptionError.apiKeyInvalid
         case 429:
             if retryCount < 1 {
+                Logger.warning(
+                    "[STT REST] rateLimited.retry model=\(model) retry=\(retryCount) sleep=2.000s",
+                    category: .stt
+                )
                 try await Task.sleep(for: .seconds(2))
-                return try await executeWithRetry(request: request, retryCount: retryCount + 1)
+                return try await executeWithRetry(request: request, model: model, retryCount: retryCount + 1)
             }
             throw TranscriptionError.rateLimited
         default:
             let message = parseErrorMessage(data) ?? "Unknown error"
             throw TranscriptionError.serverError(httpResponse.statusCode, message)
         }
+    }
+
+    private func hostDescription(_ endpoint: String) -> String {
+        URL(string: endpoint)?.host ?? "unknown"
+    }
+
+    private func estimatedPCM16MonoDuration(_ bytes: Int) -> String {
+        guard bytes > 44 else { return "0.000s" }
+        let pcmBytes = bytes - 44
+        let seconds = Double(pcmBytes) / 32_000.0
+        return formatSeconds(seconds)
+    }
+
+    private func formatSeconds(_ value: TimeInterval) -> String {
+        "\(String(format: "%.3f", value))s"
     }
 
     // MARK: - Whisper Multipart Format

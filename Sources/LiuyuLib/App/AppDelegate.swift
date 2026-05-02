@@ -29,6 +29,15 @@ func recordingPhaseEffect(for phase: RecordingState.RecordingPhase) -> Recording
     }
 }
 
+enum EditWindowPreparation: Equatable {
+    case none
+    case clearEditWindow
+}
+
+func editWindowPreparationForNewGlobalRecording(isEditWindowVisible: Bool) -> EditWindowPreparation {
+    isEditWindowVisible ? .clearEditWindow : .none
+}
+
 @MainActor
 public class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
@@ -59,6 +68,9 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
         
         AppTheme.applyFromDefaults()
         providerStore.migrateIfNeeded()
+        if UserDefaults.standard.bool(forKey: "hasCompletedOnboarding") {
+            providerStore.ensurePreferredDefaultLLMIfNeeded()
+        }
         RecordingController.cleanupOrphanedFiles()
 
         setupMainMenu()
@@ -380,6 +392,17 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
     private func startRecordingUI() {
         Logger.info("🎬 [T0] startRecordingUI called", category: .app)
         previousApp = NSWorkspace.shared.frontmostApplication
+
+        switch editWindowPreparationForNewGlobalRecording(isEditWindowVisible: editController.isWindowVisible) {
+        case .clearEditWindow:
+            Logger.info("[GLOBAL-VOICE] Clearing visible Edit window for new dictation session", category: .ui)
+            editController.clear()
+            Task {
+                await TranscriptionPresenter.shared.cancelPending()
+            }
+        case .none:
+            break
+        }
 
         panelController.viewModel.showRecording()
         panelController.show()

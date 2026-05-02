@@ -199,7 +199,7 @@ public class RecordingController: ObservableObject {
             try warmUp()
         }
 
-        var audioFile: AVAudioFile? = nil
+        var audioWriter: AudioFileBufferWriter? = nil
         var tempURL: URL? = nil
 
         if !skipFileCreation {
@@ -215,7 +215,7 @@ public class RecordingController: ObservableObject {
             }
 
             do {
-                audioFile = try AVAudioFile(forWriting: tempURL!, settings: outputFormat.settings)
+                audioWriter = try AudioFileBufferWriter(url: tempURL!, format: outputFormat)
                 Logger.debug("Created audio file with format: \(outputFormat)", category: .audio)
             } catch {
                 throw RecordingError.fileCreationFailed(error)
@@ -223,7 +223,7 @@ public class RecordingController: ObservableObject {
         }
 
         // Atomically flush pre-roll buffers to file and start recording
-        audioState.startRecording(audioFile: audioFile)
+        audioState.startRecording(audioWriter: audioWriter)
 
         // Reset audio activity tracking
         lastAudioActivityTime = Date()
@@ -371,20 +371,167 @@ public class RecordingController: ObservableObject {
 /// Returns true if the chunk was successfully processed (for async tracking)
 public typealias AudioChunkHandler = @Sendable (Data) -> Void
 
+final class AudioFileBufferWriter: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "com.liuyu.audio-file-writer")
+    private let queueKey = DispatchSpecificKey<Bool>()
+    private let url: URL
+    private let sampleRate: UInt32
+    private let channels: UInt16
+    private let bitsPerSample: UInt16
+    private var pcmData = Data()
+    private var isClosed = false
+
+    init(url: URL, format: AVAudioFormat) throws {
+        self.url = url
+        self.sampleRate = UInt32(format.sampleRate)
+        self.channels = UInt16(format.channelCount)
+        self.bitsPerSample = UInt16(format.streamDescription.pointee.mBitsPerChannel)
+        queue.setSpecific(key: queueKey, value: true)
+
+        let emptyWAV = Self.makeWAVData(
+            pcmData: Data(),
+            sampleRate: sampleRate,
+            channels: channels,
+            bitsPerSample: bitsPerSample
+        )
+        try emptyWAV.write(to: url, options: .atomic)
+    }
+
+    func write(_ buffer: AVAudioPCMBuffer) {
+        guard let copiedData = Self.copyPCMData(buffer) else {
+            Logger.error("Failed to copy audio buffer before file write", category: .audio)
+            return
+        }
+
+        queue.async { [weak self] in
+            guard let self, !self.isClosed else { return }
+            self.pcmData.append(copiedData)
+        }
+    }
+
+    func close() {
+        if DispatchQueue.getSpecific(key: queueKey) == true {
+            closeOnQueue()
+        } else {
+            queue.sync {
+                closeOnQueue()
+            }
+        }
+    }
+
+    private func closeOnQueue() {
+        guard !isClosed else { return }
+        isClosed = true
+
+        let wavData = Self.makeWAVData(
+            pcmData: pcmData,
+            sampleRate: sampleRate,
+            channels: channels,
+            bitsPerSample: bitsPerSample
+        )
+
+        do {
+            try wavData.write(to: url, options: .atomic)
+        } catch {
+            Logger.error("Failed to finalize WAV file: \(error)", category: .audio)
+        }
+
+        pcmData = Data()
+    }
+
+    private static func copyPCMData(_ buffer: AVAudioPCMBuffer) -> Data? {
+        guard buffer.frameLength > 0 else { return nil }
+
+        let sourceList = UnsafeMutableAudioBufferListPointer(
+            UnsafeMutablePointer(mutating: buffer.audioBufferList)
+        )
+
+        var data = Data()
+        for sourceBuffer in sourceList {
+            guard sourceBuffer.mDataByteSize > 0 else { continue }
+            guard let sourceData = sourceBuffer.mData else { return nil }
+            data.append(sourceData.assumingMemoryBound(to: UInt8.self), count: Int(sourceBuffer.mDataByteSize))
+        }
+
+        return data
+    }
+
+    private static func makeWAVData(
+        pcmData: Data,
+        sampleRate: UInt32,
+        channels: UInt16,
+        bitsPerSample: UInt16
+    ) -> Data {
+        let bytesPerSample = UInt32(bitsPerSample / 8)
+        let byteRate = sampleRate * UInt32(channels) * bytesPerSample
+        let blockAlign = channels * (bitsPerSample / 8)
+        let dataSize = UInt32(pcmData.count)
+        let riffSize = UInt32(36) + dataSize
+
+        var data = Data()
+        data.appendASCII("RIFF")
+        data.appendLittleEndian(riffSize)
+        data.appendASCII("WAVE")
+        data.appendASCII("fmt ")
+        data.appendLittleEndian(UInt32(16))
+        data.appendLittleEndian(UInt16(1))
+        data.appendLittleEndian(channels)
+        data.appendLittleEndian(sampleRate)
+        data.appendLittleEndian(byteRate)
+        data.appendLittleEndian(blockAlign)
+        data.appendLittleEndian(bitsPerSample)
+        data.appendASCII("data")
+        data.appendLittleEndian(dataSize)
+        data.append(pcmData)
+        return data
+    }
+}
+
+func preRollEvictionCount(currentFrameLengths: [Int], maxFrames: Int) -> Int {
+    guard maxFrames > 0 else { return currentFrameLengths.count }
+
+    var totalFrames = currentFrameLengths.reduce(0, +)
+    var evictionCount = 0
+
+    for frameLength in currentFrameLengths where totalFrames > maxFrames {
+        totalFrames -= frameLength
+        evictionCount += 1
+    }
+
+    return evictionCount
+}
+
+private extension Data {
+    mutating func appendASCII(_ string: String) {
+        append(string.data(using: .ascii)!)
+    }
+
+    mutating func appendLittleEndian(_ value: UInt16) {
+        var littleEndian = value.littleEndian
+        append(Data(bytes: &littleEndian, count: MemoryLayout<UInt16>.size))
+    }
+
+    mutating func appendLittleEndian(_ value: UInt32) {
+        var littleEndian = value.littleEndian
+        append(Data(bytes: &littleEndian, count: MemoryLayout<UInt32>.size))
+    }
+}
+
 /// Shared state between @MainActor (start/stop) and the audio render thread (tap callback).
 /// Routes converted PCM buffers to either a pre-roll ring buffer, audio file, or streaming handler.
 fileprivate final class AudioState: @unchecked Sendable {
     private let lock = NSLock()
     private var _isRecording = false
-    private var _audioFile: AVAudioFile?
+    private var _audioWriter: AudioFileBufferWriter?
     private var _preRollBuffers: [AVAudioPCMBuffer] = []
+    private var _preRollFrameCount = 0
     private var _streamingHandler: AudioChunkHandler?
     private var _accumulatedData: Data = Data()
     private var _lastSentTime: Date = Date()
 
-    // At 16kHz input with 1024-frame tap buffers at ~48kHz, each callback ≈ 21ms.
-    // 48 buffers ≈ 1.0 seconds of pre-roll audio (increased from 24 for better capture).
-    private let maxPreRollCount = 48
+    // Keep one second of converted 16kHz PCM pre-roll. Buffer duration varies by
+    // input device, so frame count is the stable unit here.
+    private let maxPreRollFrames = 16_000
 
     // Stream chunk size: ~300ms of 16kHz 16-bit mono = 9600 bytes
     private let streamChunkSize = 9600
@@ -428,15 +575,7 @@ fileprivate final class AudioState: @unchecked Sendable {
 
         if _isRecording {
             // Write to file for persistence
-            if let file = _audioFile {
-                lock.unlock()
-                do {
-                    try file.write(from: buffer)
-                } catch {
-                    Logger.error("Failed to write audio buffer: \(error)", category: .audio)
-                }
-                lock.lock()
-            }
+            _audioWriter?.write(buffer)
 
             // Stream for real-time recognition
             // ALWAYS accumulate data when recording (even if handler not set yet)
@@ -459,8 +598,16 @@ fileprivate final class AudioState: @unchecked Sendable {
             // Not recording: store in pre-roll buffer
             if pcmData != nil {
                 _preRollBuffers.append(buffer)
-                if _preRollBuffers.count > maxPreRollCount {
-                    _preRollBuffers.removeFirst()
+                _preRollFrameCount += Int(buffer.frameLength)
+
+                let evictionCount = preRollEvictionCount(
+                    currentFrameLengths: _preRollBuffers.map { Int($0.frameLength) },
+                    maxFrames: maxPreRollFrames
+                )
+                if evictionCount > 0 {
+                    for _ in 0..<evictionCount {
+                        _preRollFrameCount -= Int(_preRollBuffers.removeFirst().frameLength)
+                    }
                 }
             }
         }
@@ -487,14 +634,18 @@ fileprivate final class AudioState: @unchecked Sendable {
 
     /// Called from MainActor. Flushes pre-roll buffers to file, then starts recording.
     /// The lock ensures no gap between pre-roll flush and live recording.
-    func startRecording(audioFile: AVAudioFile? = nil) {
+    func startRecording(audioWriter: AudioFileBufferWriter? = nil) {
         lock.lock()
         // Write buffered pre-roll audio to file first (if file is provided)
         let preRollCount = _preRollBuffers.count
+        let preRollFrames = _preRollFrameCount
 
         // Process pre-roll buffers: accumulate for streaming AND write to file
         if !_preRollBuffers.isEmpty {
-            Logger.info("🎬 [A2] Processing pre-roll: \(_preRollBuffers.count) buffers", category: .audio)
+            Logger.info(
+                "🎬 [A2] Processing pre-roll: \(_preRollBuffers.count) buffers, frames=\(preRollFrames), duration=\(String(format: "%.3f", Double(preRollFrames) / 16_000.0))s",
+                category: .audio
+            )
 
             // Accumulate for streaming
             for buffer in _preRollBuffers {
@@ -504,13 +655,9 @@ fileprivate final class AudioState: @unchecked Sendable {
             }
 
             // Write to file if provided (non-streaming mode)
-            if let file = audioFile {
+            if let audioWriter {
                 for buffer in _preRollBuffers {
-                    do {
-                        try file.write(from: buffer)
-                    } catch {
-                        Logger.error("Failed to write pre-roll buffer: \(error)", category: .audio)
-                    }
+                    audioWriter.write(buffer)
                 }
             }
 
@@ -527,15 +674,19 @@ fileprivate final class AudioState: @unchecked Sendable {
 
             // Clear pre-roll buffers after processing
             _preRollBuffers.removeAll()
+            _preRollFrameCount = 0
         }
 
-        _audioFile = audioFile
+        _audioWriter = audioWriter
         _isRecording = true
         _lastSentTime = Date()
         lock.unlock()
 
         if preRollCount > 0 {
-            Logger.debug("Flushed \(preRollCount) pre-roll buffers (~\(preRollCount * 21)ms)", category: .audio)
+            Logger.debug(
+                "Flushed \(preRollCount) pre-roll buffers (\(preRollFrames) frames)",
+                category: .audio
+            )
         }
     }
 
@@ -546,9 +697,11 @@ fileprivate final class AudioState: @unchecked Sendable {
         lock.lock()
         Logger.info("🎬 [STOP] isRecording=\(_isRecording), accumulated=\(_accumulatedData.count) bytes", category: .audio)
         _isRecording = false
-        _audioFile = nil
+        let writer = _audioWriter
+        _audioWriter = nil
         // Don't clear handler or accumulated data here - let flushAccumulatedData() handle it
         lock.unlock()
+        writer?.close()
     }
 
     /// Clear streaming state after flushing
@@ -563,11 +716,14 @@ fileprivate final class AudioState: @unchecked Sendable {
     func clear() {
         lock.lock()
         _preRollBuffers.removeAll()
+        _preRollFrameCount = 0
         _accumulatedData = Data()
         _isRecording = false
-        _audioFile = nil
+        let writer = _audioWriter
+        _audioWriter = nil
         _streamingHandler = nil
         lock.unlock()
+        writer?.close()
     }
 
     /// Convert AVAudioPCMBuffer to Data (16-bit PCM)

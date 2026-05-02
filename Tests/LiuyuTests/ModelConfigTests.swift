@@ -96,6 +96,7 @@ final class ModelConfigTests: XCTestCase {
         XCTAssertNotNil(ProviderDefinition.catalog[.openai])
         XCTAssertNotNil(ProviderDefinition.catalog[.groq])
         XCTAssertNotNil(ProviderDefinition.catalog[.glm])
+        XCTAssertNotNil(ProviderDefinition.catalog[.deepseek])
         XCTAssertNotNil(ProviderDefinition.catalog[.alibaba])
         XCTAssertNotNil(ProviderDefinition.catalog[.custom])
     }
@@ -115,6 +116,14 @@ final class ModelConfigTests: XCTestCase {
         XCTAssertTrue(def.sttModels.contains("glm-asr-2512"))
         XCTAssertTrue(def.llmModels.contains("glm-4-flash"))
         XCTAssertEqual(def.sttApiFormat, .whisperMultipart)
+    }
+
+    func testDeepSeekProvider() {
+        let def = ProviderDefinition.catalog[.deepseek]!
+        XCTAssertEqual(def.llmEndpoint, "https://api.deepseek.com/chat/completions")
+        XCTAssertTrue(def.sttModels.isEmpty)
+        XCTAssertTrue(def.llmModels.contains("deepseek-v4-flash"))
+        XCTAssertTrue(def.llmModels.contains("deepseek-v4-pro"))
     }
 
     func testAlibabaProvider() {

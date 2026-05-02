@@ -6,6 +6,7 @@ public enum ProviderType: String, Codable, CaseIterable, Identifiable, Sendable 
     case openai = "OpenAI"
     case groq = "Groq"
     case glm = "GLM (Zhipu)"
+    case deepseek = "DeepSeek"
     case alibaba = "Alibaba (Qwen)"
     case custom = "Custom"
 
@@ -69,6 +70,15 @@ public struct ProviderDefinition: Sendable {
             llmModels: ["glm-4-flash"],
             sttApiFormat: .whisperMultipart,
             apiKeyURL: "https://open.bigmodel.cn/usercenter/apikeys"
+        ),
+        .deepseek: ProviderDefinition(
+            type: .deepseek,
+            sttEndpoint: "",
+            llmEndpoint: "https://api.deepseek.com/chat/completions",
+            sttModels: [],
+            llmModels: ["deepseek-v4-flash", "deepseek-v4-pro"],
+            sttApiFormat: .whisperMultipart,
+            apiKeyURL: "https://platform.deepseek.com/api_keys"
         ),
         .alibaba: ProviderDefinition(
             type: .alibaba,
@@ -216,6 +226,7 @@ public final class ProviderConfigStore: Sendable {
     private static let providersKey = "providerConfigs"
     private static let featureKey = "featureConfig"
     private static let migrationDoneKey = "providerMigrationDone"
+    private static let deepSeekDefaultLLMMigrationDoneKey = "deepseekDefaultLLMMigrationDone"
     private let keychain = KeychainHelper()
 
     public init() {}
@@ -347,6 +358,44 @@ public final class ProviderConfigStore: Sendable {
         }
 
         UserDefaults.standard.set(true, forKey: Self.migrationDoneKey)
+    }
+
+    func ensurePreferredDefaultLLMIfNeeded() {
+        guard !UserDefaults.standard.bool(forKey: Self.deepSeekDefaultLLMMigrationDoneKey) else { return }
+
+        var providers = loadProviders()
+        var feature = loadFeatureConfig()
+
+        let shouldUseDeepSeek: Bool
+        if let llmPrimary = feature.llmPrimary {
+            let provider = providers.first(where: { $0.id == llmPrimary.providerID })
+            shouldUseDeepSeek = provider?.provider == .glm && llmPrimary.modelId == "glm-4-flash"
+        } else {
+            shouldUseDeepSeek = true
+        }
+
+        guard shouldUseDeepSeek else {
+            UserDefaults.standard.set(true, forKey: Self.deepSeekDefaultLLMMigrationDoneKey)
+            return
+        }
+
+        let deepSeekProvider: ProviderConfig
+        if let existing = providers.first(where: { $0.provider == .deepseek }) {
+            deepSeekProvider = existing
+        } else {
+            let provider = ProviderConfig(provider: .deepseek)
+            providers.append(provider)
+            saveProviders(providers)
+            deepSeekProvider = provider
+        }
+
+        feature.llmPrimary = ModelAssignment(
+            providerID: deepSeekProvider.id,
+            modelId: "deepseek-v4-flash"
+        )
+        saveFeatureConfig(feature)
+
+        UserDefaults.standard.set(true, forKey: Self.deepSeekDefaultLLMMigrationDoneKey)
     }
 }
 

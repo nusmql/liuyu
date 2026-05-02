@@ -9,6 +9,26 @@ public enum EditState: Equatable {
     case editing  // LLM processing
 }
 
+enum StreamingPartialTextUpdate: Equatable {
+    case keepExistingText
+    case replaceText(String)
+}
+
+func editStateAfterRecordingStops(hasExistingText: Bool) -> EditState {
+    .transcribing
+}
+
+func editStateAfterTranscriptionCompletes(hasExistingText: Bool) -> EditState {
+    hasExistingText ? .editing : .idle
+}
+
+func streamingPartialTextUpdate(
+    hadExistingTextAtRecordingStart: Bool,
+    partialText: String
+) -> StreamingPartialTextUpdate {
+    hadExistingTextAtRecordingStart ? .keepExistingText : .replaceText(partialText)
+}
+
 @MainActor
 public class EditViewModel: ObservableObject {
     @Published public var text: String = ""
@@ -21,9 +41,13 @@ public class EditViewModel: ObservableObject {
     private var recordingStartTime: Date?
     private var currentAudioURL: URL?
     private var recordingFailed = false
+    private var textAtRecordingStart: String?
 
     private let minimumRecordingDuration: TimeInterval = 0.3
     private var e2eStartTime: Date?
+    private var editTraceToken = UUID()
+    private var editTraceStartTime: Date?
+    private var editTraceLastTime: Date?
 
     // Streaming transcription support
     private var streamingSession: StreamingTranscriptionSession?
@@ -75,6 +99,62 @@ public class EditViewModel: ObservableObject {
         }
     }
 
+    @discardableResult
+    private func beginEditTrace(reason: String) -> UUID {
+        let token = UUID()
+        editTraceToken = token
+        editTraceStartTime = Date()
+        editTraceLastTime = editTraceStartTime
+        Logger.info("[EDIT trace=\(traceID(token))] begin reason=\(reason) state=\(editState) textChars=\(text.count)", category: .app)
+        return token
+    }
+
+    private func invalidateEditTrace(reason: String) {
+        let oldToken = editTraceToken
+        editTraceToken = UUID()
+        Logger.info("[EDIT trace=\(traceID(oldToken))] invalidated reason=\(reason)", category: .app)
+    }
+
+    private func isCurrentTrace(_ token: UUID) -> Bool {
+        token == editTraceToken
+    }
+
+    private func guardCurrentTrace(_ token: UUID, stage: String) -> Bool {
+        guard isCurrentTrace(token) else {
+            Logger.info("[EDIT trace=\(traceID(token))] stale result ignored stage=\(stage)", category: .app)
+            return false
+        }
+        return true
+    }
+
+    private func trace(_ stage: String, token: UUID, category: Logger.Category = .app, details: String = "") {
+        let now = Date()
+        let total = editTraceStartTime.map { now.timeIntervalSince($0) } ?? 0
+        let delta = editTraceLastTime.map { now.timeIntervalSince($0) } ?? 0
+        editTraceLastTime = now
+        let suffix = details.isEmpty ? "" : " \(details)"
+        Logger.info(
+            "[EDIT trace=\(traceID(token))] \(stage) delta=\(formatSeconds(delta)) total=\(formatSeconds(total))\(suffix)",
+            category: category
+        )
+    }
+
+    private func finishTrace(_ stage: String, token: UUID, category: Logger.Category = .app, details: String = "") {
+        trace(stage, token: token, category: category, details: details)
+        if isCurrentTrace(token) {
+            editTraceStartTime = nil
+            editTraceLastTime = nil
+        }
+    }
+
+    private func traceID(_ token: UUID) -> String {
+        String(token.uuidString.prefix(8))
+    }
+
+    private func formatSeconds(_ value: TimeInterval) -> String {
+        "\(String(format: "%.3f", value))s"
+    }
+
     private func updateAudioActivity(level: Float) {
         let threshold: Float = 0.25
         if level > threshold {
@@ -114,25 +194,27 @@ public class EditViewModel: ObservableObject {
 
     public func startRecording() {
         // Fail-safe: reset any stuck state from previous errors
+        let traceToken = beginEditTrace(reason: hasText ? "voice-edit-recording" : "new-dictation-recording")
+        textAtRecordingStart = hasText ? text : nil
         recordingFailed = false
         stopSilenceDetection()
         cleanupAudio()
 
         errorMessage = nil
         e2eStartTime = Date()
-        Logger.info("🎬 [T0] startRecording called", category: .app)
+        trace("recording.start.requested", token: traceToken, details: "hasText=\(hasText)")
 
         // Check if we should use streaming transcription
         let feature = providerStore.loadFeatureConfig()
-        Logger.debug("Checking streaming mode: sttPrimary=\(feature.sttPrimary != nil)", category: .app)
+        trace("provider.config.loaded", token: traceToken, details: "sttPrimary=\(feature.sttPrimary != nil) llmPrimary=\(feature.llmPrimary != nil)")
 
         if let stt = feature.sttPrimary {
             if let params = providerStore.resolveSTT(stt) {
-                Logger.debug("Resolved STT: model=\(params.model), format=\(params.apiFormat)", category: .app)
+                trace("stt.resolved", token: traceToken, details: "model=\(params.model) format=\(params.apiFormat.rawValue)")
                 if params.apiFormat == .alibabaRealtime || params.apiFormat == .tencentRealtime {
                     // Use streaming for WebSocket-based providers
                     Task {
-                        await startStreamingRecording(stt: stt, params: params)
+                        await startStreamingRecording(stt: stt, params: params, token: traceToken)
                     }
                     return
                 }
@@ -147,18 +229,25 @@ public class EditViewModel: ObservableObject {
             recordingStartTime = Date()
             editState = .recording(audioLevel: 0)
             startSilenceDetection()
-            Logger.debug("Recording started (file-based)", category: .app)
+            trace("recording.started.file", token: traceToken)
         } catch {
             recordingFailed = true
             errorMessage = error.localizedDescription
             editState = .idle  // Fail-safe: ensure state resets on error
+            textAtRecordingStart = nil
+            finishTrace("recording.start.failed", token: traceToken, details: "error=\(error.localizedDescription)")
         }
     }
 
     /// Start recording with real-time streaming transcription
     @MainActor
-    private func startStreamingRecording(stt: ModelAssignment, params: (apiKey: String, endpoint: String, model: String, apiFormat: ApiFormat)) async {
-        Logger.info("🎬 [T1] startStreamingRecording called - model: \(params.model)", category: .app)
+    private func startStreamingRecording(
+        stt: ModelAssignment,
+        params: (apiKey: String, endpoint: String, model: String, apiFormat: ApiFormat),
+        token: UUID
+    ) async {
+        guard guardCurrentTrace(token, stage: "streaming.start") else { return }
+        trace("streaming.start", token: token, details: "model=\(params.model) format=\(params.apiFormat.rawValue)")
 
         // Create transcription service
         let language = UserDefaults.standard.string(forKey: "language") ?? "auto"
@@ -176,17 +265,25 @@ public class EditViewModel: ObservableObject {
         do {
             // STEP 1: Start recording FIRST to capture all audio
             // This ensures we don't miss audio during WebSocket connection
-            Logger.info("🎬 [T2] Starting audio recording...", category: .audio)
+            trace("streaming.audio.start.begin", token: token, category: .audio)
             try recordingController.startStreaming()
-            Logger.info("🎬 [T3] Audio recording started", category: .audio)
+            guard guardCurrentTrace(token, stage: "streaming.audio.started") else {
+                await cleanupStreaming()
+                return
+            }
+            trace("streaming.audio.started", token: token, category: .audio)
             recordingStartTime = Date()
             editState = .recording(audioLevel: 0)
             startSilenceDetection()
 
             // STEP 2: Connect to WebSocket while recording is ongoing
-            Logger.info("🎬 [T4] Connecting WebSocket...", category: .stt)
+            trace("streaming.connect.begin", token: token, category: .stt)
             try await streamingSession?.connect()
-            Logger.info("🎬 [T5] WebSocket connected", category: .stt)
+            guard guardCurrentTrace(token, stage: "streaming.connected") else {
+                await cleanupStreaming()
+                return
+            }
+            trace("streaming.connected", token: token, category: .stt)
 
             // STEP 3: Set up streaming handler - this will flush any buffered audio
             recordingController.setStreamingHandler { [weak self] chunk in
@@ -198,27 +295,29 @@ public class EditViewModel: ObservableObject {
                     }
                 }
             }
-            Logger.info("🎬 [T6] Streaming handler set up", category: .audio)
+            trace("streaming.handler.ready", token: token, category: .audio)
 
             // STEP 4: Start listening for results
-            startStreamingResultsListener()
+            startStreamingResultsListener(token: token)
 
-            Logger.debug("Recording started (streaming)", category: .app)
+            trace("recording.started.streaming", token: token)
         } catch {
             recordingFailed = true
             errorMessage = error.localizedDescription
             editState = .idle
+            textAtRecordingStart = nil
             await streamingSession?.disconnect()
             streamingSession = nil
+            finishTrace("streaming.start.failed", token: token, details: "error=\(error.localizedDescription)")
         }
     }
 
     /// Listen for streaming transcription results
-    private func startStreamingResultsListener() {
+    private func startStreamingResultsListener(token: UUID) {
         streamingTask?.cancel()
         streamingTask = Task { [weak self] in
             guard let self = self, let session = self.streamingSession else { return }
-            Logger.info("🎬 [T7] Started listening for transcription results", category: .stt)
+            self.trace("streaming.results.listen", token: token, category: .stt)
 
             defer {
                 // Ensure cleanup if stream ends unexpectedly
@@ -240,41 +339,68 @@ public class EditViewModel: ObservableObject {
 
                 switch result {
                 case .partial(let text):
-                    Logger.info("🎬 [T8] Partial result: \"\(text)\"", category: .stt)
-                    // Show partial results in UI for real-time streaming feedback
+                    self.trace("streaming.partial", token: token, category: .stt, details: "chars=\(text.count)")
                     await MainActor.run {
-                        // Combine existing text with partial result for display
-                        if self.hasText {
-                            self.text = text
-                        } else {
+                        guard self.guardCurrentTrace(token, stage: "streaming.partial.ui") else { return }
+                        switch streamingPartialTextUpdate(
+                            hadExistingTextAtRecordingStart: self.textAtRecordingStart != nil,
+                            partialText: text
+                        ) {
+                        case .keepExistingText:
+                            break
+                        case .replaceText(let text):
                             self.text = text
                         }
                     }
 
                 case .final(let text):
-                    Logger.info("🎬 [T9] Final result received: \"\(text)\"", category: .stt)
-                    await MainActor.run {
-                        // If text is empty (task-finished signal), keep existing text
-                        if !text.isEmpty {
-                            self.text = text
+                    self.trace("streaming.final", token: token, category: .stt, details: "chars=\(text.count)")
+                    let shouldEdit = await MainActor.run { () -> Bool in
+                        guard self.guardCurrentTrace(token, stage: "streaming.final.ui") else { return false }
+                        guard !text.isEmpty else {
+                            self.editState = .idle
+                            self.textAtRecordingStart = nil
+                            self.finishTrace("streaming.done.emptyFinal", token: token, details: "textChars=\(self.text.count)")
+                            return false
                         }
-                        self.editState = .idle
+                        if let originalText = self.textAtRecordingStart {
+                            self.text = originalText
+                            self.editState = editStateAfterTranscriptionCompletes(hasExistingText: true)
+                            self.trace("ui.state.editing", token: token, category: .ui, details: "instructionChars=\(text.count) textChars=\(self.text.count)")
+                            return true
+                        } else {
+                            self.text = text
+                            self.editState = .idle
+                            self.textAtRecordingStart = nil
+                            self.finishTrace("streaming.done", token: token, details: "textChars=\(self.text.count)")
+                            return false
+                        }
+                    }
+                    if shouldEdit {
+                        let feature = await MainActor.run { self.providerStore.loadFeatureConfig() }
+                        await self.editWithLLM(instruction: text, feature: feature, token: token)
+                        await MainActor.run {
+                            self.textAtRecordingStart = nil
+                            self.finishTrace("streaming.edit.done", token: token, details: "textChars=\(self.text.count)")
+                        }
                     }
                     await self.cleanupStreaming()
                     return
 
                 case .error(let error):
-                    Logger.error("🎬 [T9-ERROR] Streaming error: \(error)", category: .stt)
+                    self.trace("streaming.error", token: token, category: .stt, details: "error=\(error.localizedDescription)")
                     await MainActor.run {
+                        guard self.guardCurrentTrace(token, stage: "streaming.error.ui") else { return }
                         self.errorMessage = error.localizedDescription
                         self.editState = .idle
+                        self.textAtRecordingStart = nil
                     }
                     await self.cleanupStreaming()
                     return
                 }
             }
 
-            Logger.info("🎬 [T7-END] Result stream ended", category: .stt)
+            self.trace("streaming.results.end", token: token, category: .stt)
         }
     }
 
@@ -288,32 +414,29 @@ public class EditViewModel: ObservableObject {
     }
 
     public func stopRecording() {
-        Logger.info("🎬 [T10] stopRecording called", category: .app)
+        let traceToken = editTraceToken
+        trace("recording.stop.requested", token: traceToken)
         // Always reset the failed flag so next gesture can try again
         recordingFailed = false
 
         guard case .recording = editState else {
-            Logger.warning("stopRecording: not in recording state (current: \(editState))", category: .app)
+            trace("recording.stop.ignored", token: traceToken, details: "state=\(editState)")
             return
         }
 
         stopSilenceDetection()
 
         // Check if we're in streaming mode
-        Logger.debug("stopRecording: streamingSession=\(streamingSession != nil)", category: .app)
+        trace("recording.stop.mode", token: traceToken, details: "streaming=\(streamingSession != nil)")
         if streamingSession != nil {
             Task {
-                await finishStreamingRecording()
+                await finishStreamingRecording(token: traceToken)
             }
             return
         }
 
-        // Immediately switch to processing state so UI shows "Processing" instead of stuck waveform
-        if hasText {
-            editState = .editing
-        } else {
-            editState = .transcribing
-        }
+        editState = editStateAfterRecordingStops(hasExistingText: textAtRecordingStart != nil)
+        trace("ui.state.transcribing", token: traceToken, category: .ui, details: "willEdit=\(textAtRecordingStart != nil) textChars=\(text.count)")
 
         let elapsed = Date().timeIntervalSince(recordingStartTime ?? Date())
 
@@ -321,35 +444,32 @@ public class EditViewModel: ObservableObject {
             let remaining = minimumRecordingDuration - elapsed
             Task {
                 try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
-                await finishRecording()
+                await finishRecording(token: traceToken)
             }
         } else {
             Task {
-                await finishRecording()
+                await finishRecording(token: traceToken)
             }
         }
     }
 
     /// Finish streaming recording and send final audio chunk
     @MainActor
-    private func finishStreamingRecording() async {
-        Logger.info("🎬 [T11] finishStreamingRecording started", category: .app)
+    private func finishStreamingRecording(token: UUID) async {
+        guard guardCurrentTrace(token, stage: "streaming.finish") else { return }
+        trace("streaming.finish.begin", token: token)
 
         // Stop recording first - this waits for audio engine to finish processing
         _ = recordingController.stop() // Stop file recording (we don't use the file)
-        Logger.info("🎬 [T12] Audio recording stopped", category: .audio)
+        trace("streaming.audio.stopped", token: token, category: .audio)
 
-        // Immediately switch to processing state so UI shows "Processing"
-        if hasText {
-            editState = .editing
-        } else {
-            editState = .transcribing
-        }
+        editState = editStateAfterRecordingStops(hasExistingText: textAtRecordingStart != nil)
+        trace("ui.state.transcribing", token: token, category: .ui, details: "willEdit=\(textAtRecordingStart != nil) textChars=\(text.count)")
 
         // Flush any remaining accumulated audio data
         // CRITICAL: Must call this AFTER stop() which waits for audio engine
         let flushedData = recordingController.flushStreamingData()
-        Logger.info("🎬 [T12b] Flushed data: \(flushedData?.count ?? 0) bytes", category: .audio)
+        trace("streaming.flush", token: token, category: .audio, details: "bytes=\(flushedData?.count ?? 0)")
 
         // Now clear streaming state (handler and accumulated data)
         recordingController.clearStreamingState()
@@ -358,91 +478,117 @@ public class EditViewModel: ObservableObject {
         // This ensures proper ordering: audio data first, then finish signal
         do {
             if let data = flushedData, !data.isEmpty {
-                Logger.info("🎬 [T13] Sending flushed audio data: \(data.count) bytes...", category: .stt)
+                trace("streaming.flush.send.begin", token: token, category: .stt, details: "bytes=\(data.count)")
                 try await streamingSession?.sendAudioChunk(data, isFinal: false)
-                Logger.info("🎬 [T13b] Flushed data sent", category: .stt)
+                trace("streaming.flush.send.done", token: token, category: .stt)
             }
 
             // Now send final chunk to indicate end of stream
-            Logger.info("🎬 [T14] Sending final audio chunk (finish-task)...", category: .stt)
+            trace("streaming.final.send.begin", token: token, category: .stt)
             try await streamingSession?.sendAudioChunk(Data(), isFinal: true)
-            Logger.info("🎬 [T15] Final chunk sent, waiting for transcription...", category: .stt)
+            trace("streaming.final.send.done", token: token, category: .stt)
         } catch {
             Logger.error("Failed to send final chunk: \(error)", category: .stt)
-            errorMessage = error.localizedDescription
-            editState = .idle
+            if guardCurrentTrace(token, stage: "streaming.finish.error") {
+                errorMessage = error.localizedDescription
+                editState = .idle
+                textAtRecordingStart = nil
+            }
             await cleanupStreaming()
         }
 
         // Results will be handled by streamingTask listener
     }
 
-    private func finishRecording() async {
+    private func finishRecording(token: UUID) async {
+        guard guardCurrentTrace(token, stage: "finishRecording") else { return }
         guard let audioURL = recordingController.stop() else {
             await MainActor.run {
+                guard self.guardCurrentTrace(token, stage: "finishRecording.noAudio") else { return }
                 errorMessage = "No audio recorded."
                 editState = .idle
+                textAtRecordingStart = nil
             }
             return
         }
 
         let recordingDuration = Date().timeIntervalSince(recordingStartTime ?? Date())
-        Logger.debug("Recording stopped — duration: \(String(format: "%.2f", recordingDuration))s", category: .app)
+        trace("recording.stopped.file", token: token, details: "duration=\(formatSeconds(recordingDuration))")
 
         currentAudioURL = audioURL
-        await processAudio(audioURL: audioURL)
+        await processAudio(audioURL: audioURL, token: token)
     }
 
     // MARK: - Processing
 
-    private func processAudio(audioURL: URL) async {
+    private func processAudio(audioURL: URL, token: UUID) async {
+        guard guardCurrentTrace(token, stage: "processAudio") else { return }
         let feature = providerStore.loadFeatureConfig()
+        let audioBytes = ((try? FileManager.default.attributesOfItem(atPath: audioURL.path)[.size]) as? Int) ?? 0
+        let shouldEditExistingText = textAtRecordingStart != nil
+        trace("processAudio.begin", token: token, details: "audioBytes=\(audioBytes) willEdit=\(shouldEditExistingText) textChars=\(text.count)")
 
         // Step 1: Transcribe the voice
         let sttStart = Date()
-        guard let transcribedText = await transcribe(audioURL: audioURL, feature: feature) else {
-            editState = .idle
+        guard let transcribedText = await transcribe(audioURL: audioURL, feature: feature, token: token) else {
+            if guardCurrentTrace(token, stage: "processAudio.transcribe.nil") {
+                editState = .idle
+                textAtRecordingStart = nil
+                finishTrace("processAudio.done.noText", token: token)
+            }
             return
         }
-        Logger.debug("STT completed — \(String(format: "%.2f", Date().timeIntervalSince(sttStart)))s — \"\(transcribedText.prefix(80))\"", category: .stt)
+        trace("stt.done", token: token, category: .stt, details: "duration=\(formatSeconds(Date().timeIntervalSince(sttStart))) chars=\(transcribedText.count)")
+        guard guardCurrentTrace(token, stage: "processAudio.afterSTT") else { return }
 
-        // Step 2: If there's existing text, send to LLM for editing
-        if hasText {
+        // Step 2: If recording started with existing text, send the voice instruction to LLM.
+        if shouldEditExistingText {
+            editState = editStateAfterTranscriptionCompletes(hasExistingText: true)
+            trace("ui.state.editing", token: token, category: .ui, details: "instructionChars=\(transcribedText.count) textChars=\(text.count)")
             let llmStart = Date()
-            await editWithLLM(instruction: transcribedText, feature: feature)
-            Logger.debug("LLM edit completed — \(String(format: "%.2f", Date().timeIntervalSince(llmStart)))s", category: .stt)
+            await editWithLLM(instruction: transcribedText, feature: feature, token: token)
+            trace("llm.done", token: token, category: .stt, details: "duration=\(formatSeconds(Date().timeIntervalSince(llmStart)))")
         } else {
+            guard guardCurrentTrace(token, stage: "processAudio.setText") else { return }
             text = transcribedText
             editState = .idle
         }
 
         let e2eTotal = Date().timeIntervalSince(e2eStartTime ?? Date())
-        Logger.info("End-to-end total: \(String(format: "%.2f", e2eTotal))s", category: .app)
+        textAtRecordingStart = nil
+        finishTrace("processAudio.done", token: token, details: "e2e=\(formatSeconds(e2eTotal)) finalTextChars=\(text.count)")
 
         cleanupAudio()
     }
 
-    private func transcribe(audioURL: URL, feature: FeatureConfig) async -> String? {
+    private func transcribe(audioURL: URL, feature: FeatureConfig, token: UUID) async -> String? {
         guard let stt = feature.sttPrimary else {
-            errorMessage = "No STT model configured. Open Settings."
+            if guardCurrentTrace(token, stage: "stt.noPrimary") {
+                errorMessage = "No STT model configured. Open Settings."
+            }
             return nil
         }
 
-        let (result, error) = await tryTranscribe(assignment: stt, audioURL: audioURL)
+        let (result, error) = await tryTranscribe(assignment: stt, audioURL: audioURL, token: token, label: "primary")
         if let result { return result }
 
         if let fallback = feature.sttFallback {
-            let (fallbackResult, fallbackError) = await tryTranscribe(assignment: fallback, audioURL: audioURL)
+            let (fallbackResult, fallbackError) = await tryTranscribe(assignment: fallback, audioURL: audioURL, token: token, label: "fallback")
             if let fallbackResult { return fallbackResult }
-            errorMessage = fallbackError ?? error ?? "Transcription failed."
+            if guardCurrentTrace(token, stage: "stt.failed") {
+                errorMessage = fallbackError ?? error ?? "Transcription failed."
+            }
         } else {
-            errorMessage = error ?? "Transcription failed."
+            if guardCurrentTrace(token, stage: "stt.failed") {
+                errorMessage = error ?? "Transcription failed."
+            }
         }
         return nil
     }
 
-    private func tryTranscribe(assignment: ModelAssignment, audioURL: URL) async -> (String?, String?) {
+    private func tryTranscribe(assignment: ModelAssignment, audioURL: URL, token: UUID, label: String) async -> (String?, String?) {
         guard let params = providerStore.resolveSTT(assignment) else {
+            trace("stt.\(label).resolve.failed", token: token, category: .settings, details: "providerID=\(assignment.providerID)")
             return (nil, "Could not resolve provider. Check API key in Settings.")
         }
         let language = UserDefaults.standard.string(forKey: "language") ?? "auto"
@@ -455,45 +601,59 @@ public class EditViewModel: ObservableObject {
         )
         do {
             let apiStart = Date()
+            trace("stt.\(label).api.begin", token: token, category: .stt, details: "model=\(params.model) format=\(params.apiFormat.rawValue)")
             let text = try await service.transcribe(audioFileURL: audioURL)
-            Logger.debug("STT API call [\(params.model)] — \(String(format: "%.2f", Date().timeIntervalSince(apiStart)))s", category: .stt)
+            trace("stt.\(label).api.done", token: token, category: .stt, details: "model=\(params.model) duration=\(formatSeconds(Date().timeIntervalSince(apiStart))) chars=\(text.count)")
             return (text, nil)
         } catch {
-            Logger.error("[\(params.model)] \(error.localizedDescription) | endpoint=\(params.endpoint)", category: .stt)
+            trace("stt.\(label).api.failed", token: token, category: .stt, details: "model=\(params.model) duration=unknown error=\(error.localizedDescription) endpoint=\(params.endpoint)")
             return (nil, error.localizedDescription)
         }
     }
 
-    private func editWithLLM(instruction: String, feature: FeatureConfig) async {
+    private func editWithLLM(instruction: String, feature: FeatureConfig, token: UUID) async {
+        guard guardCurrentTrace(token, stage: "llm.edit.begin") else { return }
+        trace("llm.edit.begin", token: token, category: .stt, details: "textChars=\(text.count) instructionChars=\(instruction.count)")
         guard let llm = feature.llmPrimary else {
             // No LLM configured -- fall back to appending
+            guard guardCurrentTrace(token, stage: "llm.noPrimary") else { return }
             text += (text.isEmpty ? "" : " ") + instruction
             editState = .idle
             errorMessage = "No LLM model configured. Text appended instead."
+            trace("llm.edit.appended.noPrimary", token: token, category: .stt, details: "finalTextChars=\(text.count)")
             return
         }
 
-        if let result = await tryLLMEdit(assignment: llm, instruction: instruction) {
+        if let result = await tryLLMEdit(assignment: llm, instruction: instruction, token: token, label: "primary") {
+            guard guardCurrentTrace(token, stage: "llm.primary.apply") else { return }
             text = result
             editState = .idle
+            trace("llm.primary.applied", token: token, category: .stt, details: "finalTextChars=\(text.count)")
             return
         }
 
         if let fallback = feature.llmFallback,
-           let result = await tryLLMEdit(assignment: fallback, instruction: instruction) {
+           let result = await tryLLMEdit(assignment: fallback, instruction: instruction, token: token, label: "fallback") {
+            guard guardCurrentTrace(token, stage: "llm.fallback.apply") else { return }
             text = result
             editState = .idle
+            trace("llm.fallback.applied", token: token, category: .stt, details: "finalTextChars=\(text.count)")
             return
         }
 
         // All failed -- append the instruction as text
+        guard guardCurrentTrace(token, stage: "llm.failed.append") else { return }
         text += (text.isEmpty ? "" : " ") + instruction
         editState = .idle
         errorMessage = "LLM edit failed. Text appended instead."
+        trace("llm.edit.appended.failure", token: token, category: .stt, details: "finalTextChars=\(text.count)")
     }
 
-    private func tryLLMEdit(assignment: ModelAssignment, instruction: String) async -> String? {
-        guard let params = providerStore.resolveLLM(assignment) else { return nil }
+    private func tryLLMEdit(assignment: ModelAssignment, instruction: String, token: UUID, label: String) async -> String? {
+        guard let params = providerStore.resolveLLM(assignment) else {
+            trace("llm.\(label).resolve.failed", token: token, category: .settings, details: "providerID=\(assignment.providerID)")
+            return nil
+        }
 
         let systemPrompt = """
         You are a text editor. Modify the provided text according to the user's instruction.
@@ -519,9 +679,20 @@ public class EditViewModel: ObservableObject {
             model: params.model
         )
         let apiStart = Date()
-        let result = try? await service.chat(system: systemPrompt, user: userMessage)
-        Logger.debug("LLM API call [\(params.model)] — \(String(format: "%.2f", Date().timeIntervalSince(apiStart)))s", category: .stt)
-        return result
+        trace(
+            "llm.\(label).api.begin",
+            token: token,
+            category: .stt,
+            details: "model=\(params.model) promptChars=\(systemPrompt.count + userMessage.count)"
+        )
+        do {
+            let result = try await service.chat(system: systemPrompt, user: userMessage)
+            trace("llm.\(label).api.done", token: token, category: .stt, details: "model=\(params.model) duration=\(formatSeconds(Date().timeIntervalSince(apiStart))) responseChars=\(result.count)")
+            return result
+        } catch {
+            trace("llm.\(label).api.failed", token: token, category: .stt, details: "model=\(params.model) duration=\(formatSeconds(Date().timeIntervalSince(apiStart))) error=\(error.localizedDescription) endpoint=\(params.endpoint)")
+            return nil
+        }
     }
 
     // MARK: - External Instruction
@@ -531,20 +702,24 @@ public class EditViewModel: ObservableObject {
     public func applyInstruction(_ instruction: String) async {
         guard !instruction.isEmpty else { return }
 
+        let traceToken = beginEditTrace(reason: "external-instruction")
         editState = .editing
         e2eStartTime = Date()
+        trace("ui.state.editing", token: traceToken, category: .ui, details: "externalInstructionChars=\(instruction.count) textChars=\(text.count)")
 
         let feature = providerStore.loadFeatureConfig()
 
-        await editWithLLM(instruction: instruction, feature: feature)
+        await editWithLLM(instruction: instruction, feature: feature, token: traceToken)
 
         let e2eTotal = Date().timeIntervalSince(e2eStartTime ?? Date())
-        Logger.info("End-to-end total: \(String(format: "%.2f", e2eTotal))s", category: .app)
+        finishTrace("externalInstruction.done", token: traceToken, details: "e2e=\(formatSeconds(e2eTotal)) finalTextChars=\(text.count)")
     }
 
     // MARK: - Actions
 
     public func clear() {
+        invalidateEditTrace(reason: "clear")
+        textAtRecordingStart = nil
         text = ""
         errorMessage = nil
         editState = .idle

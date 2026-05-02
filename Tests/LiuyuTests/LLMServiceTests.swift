@@ -115,6 +115,35 @@ final class LLMServiceTests: XCTestCase {
         XCTAssertEqual(messages[1]["content"], "usr")
     }
 
+    func testDeepSeekV4FlashDisablesThinkingForEditSpeed() async throws {
+        var capturedRequest: URLRequest?
+
+        MockURLProtocol.handler = { request in
+            capturedRequest = request
+            let response = HTTPURLResponse(
+                url: request.url!, statusCode: 200,
+                httpVersion: nil, headerFields: nil
+            )!
+            return (response, #"{"choices":[{"message":{"content":"ok"}}]}"#.data(using: .utf8)!)
+        }
+
+        let service = LLMService(
+            apiKey: "sk-deepseek",
+            endpoint: "https://api.deepseek.com/chat/completions",
+            model: "deepseek-v4-flash",
+            session: makeSession()
+        )
+
+        _ = try await service.chat(system: "sys", user: "usr")
+
+        let request = try XCTUnwrap(capturedRequest)
+        let body = try requestBody(from: request)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertEqual(json["model"] as? String, "deepseek-v4-flash")
+        let thinking = try XCTUnwrap(json["thinking"] as? [String: String])
+        XCTAssertEqual(thinking["type"], "disabled")
+    }
+
     func testEmptyResponse() async throws {
         MockURLProtocol.handler = { request in
             let response = HTTPURLResponse(
@@ -139,5 +168,27 @@ final class LLMServiceTests: XCTestCase {
                 XCTFail("Expected emptyResponse, got \(error)")
             }
         }
+    }
+
+    private func requestBody(from request: URLRequest) throws -> Data {
+        if let httpBody = request.httpBody {
+            return httpBody
+        }
+        if let stream = request.httpBodyStream {
+            stream.open()
+            var data = Data()
+            let bufferSize = 1024
+            let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: bufferSize)
+            defer { buffer.deallocate() }
+            while stream.hasBytesAvailable {
+                let read = stream.read(buffer, maxLength: bufferSize)
+                if read > 0 { data.append(buffer, count: read) }
+                else { break }
+            }
+            stream.close()
+            return data
+        }
+        XCTFail("No request body found")
+        return Data()
     }
 }
