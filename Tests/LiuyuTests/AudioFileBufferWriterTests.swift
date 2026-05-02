@@ -17,6 +17,24 @@ final class AudioFileBufferWriterTests: XCTestCase {
         )
     }
 
+    func testStreamingChunkSplitKeepsRemainderForLiveStreaming() {
+        let data = Data((0..<25).map(UInt8.init))
+        let split = streamingChunkSplit(data, chunkSize: 10, includeRemainder: false)
+
+        XCTAssertEqual(split.chunks.map(\.count), [10, 10])
+        XCTAssertEqual(split.chunks[0], Data((0..<10).map(UInt8.init)))
+        XCTAssertEqual(split.chunks[1], Data((10..<20).map(UInt8.init)))
+        XCTAssertEqual(split.remainder, Data((20..<25).map(UInt8.init)))
+    }
+
+    func testStreamingChunkSplitCanFlushRemainderAtStop() {
+        let data = Data((0..<25).map(UInt8.init))
+        let split = streamingChunkSplit(data, chunkSize: 10, includeRemainder: true)
+
+        XCTAssertEqual(split.chunks.map(\.count), [10, 10, 5])
+        XCTAssertTrue(split.remainder.isEmpty)
+    }
+
     func testCloseDrainsQueuedWritesBeforeReturning() throws {
         let url = temporaryWAVURL()
         defer { try? FileManager.default.removeItem(at: url) }

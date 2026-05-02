@@ -191,13 +191,11 @@ private struct RotatingArc: View {
     @State private var rotation: Double = 0
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 60, paused: false)) { _ in
-            Circle()
-                .trim(from: 0, to: 0.75)
-                .stroke(Color.weChatGreen, style: StrokeStyle(lineWidth: 4, lineCap: .round))
-                .frame(width: 56, height: 56)
-                .rotationEffect(.degrees(rotation))
-        }
+        Circle()
+            .trim(from: 0, to: 0.75)
+            .stroke(Color.weChatGreen, style: StrokeStyle(lineWidth: 4, lineCap: .round))
+            .frame(width: 56, height: 56)
+            .rotationEffect(.degrees(rotation))
         .onAppear {
             withAnimation(.linear(duration: 1.0).repeatForever(autoreverses: false)) {
                 rotation = 360

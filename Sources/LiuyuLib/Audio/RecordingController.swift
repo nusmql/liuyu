@@ -508,6 +508,30 @@ func preRollEvictionCount(currentFrameLengths: [Int], maxFrames: Int) -> Int {
     return evictionCount
 }
 
+func streamingChunkSplit(
+    _ data: Data,
+    chunkSize: Int,
+    includeRemainder: Bool
+) -> (chunks: [Data], remainder: Data) {
+    let normalizedChunkSize = max(1, chunkSize)
+    var chunks: [Data] = []
+    var offset = data.startIndex
+
+    while data.distance(from: offset, to: data.endIndex) >= normalizedChunkSize {
+        let end = data.index(offset, offsetBy: normalizedChunkSize)
+        chunks.append(data.subdata(in: offset..<end))
+        offset = end
+    }
+
+    let remainder = offset < data.endIndex ? data.subdata(in: offset..<data.endIndex) : Data()
+    if includeRemainder, !remainder.isEmpty {
+        chunks.append(remainder)
+        return (chunks, Data())
+    }
+
+    return (chunks, remainder)
+}
+
 private extension Data {
     mutating func appendASCII(_ string: String) {
         append(string.data(using: .ascii)!)
@@ -556,13 +580,20 @@ fileprivate final class AudioState: @unchecked Sendable {
         lock.lock()
         _streamingHandler = handler
 
-        // If we have buffered audio data and a handler is being set, send the buffered data
+        // If we have buffered audio data and a handler is being set, send full
+        // fixed-size chunks and keep the tail for the normal stop-time flush.
         if let handler = handler, !_accumulatedData.isEmpty {
-            let bufferedData = _accumulatedData
-            _accumulatedData = Data()
+            let split = streamingChunkSplit(
+                _accumulatedData,
+                chunkSize: streamChunkSize,
+                includeRemainder: false
+            )
+            _accumulatedData = split.remainder
             lock.unlock()
-            Logger.info("🎬 [HANDLER-SET] Sending \(bufferedData.count) bytes of buffered audio", category: .audio)
-            handler(bufferedData)
+            for chunk in split.chunks {
+                Logger.info("🎬 [HANDLER-SET] Sending \(chunk.count) bytes of buffered audio", category: .audio)
+                handler(chunk)
+            }
             return
         }
 
@@ -599,12 +630,18 @@ fileprivate final class AudioState: @unchecked Sendable {
 
                 // Send chunk when accumulated enough (~300ms) and handler is set
                 if let handler = _streamingHandler, _accumulatedData.count >= streamChunkSize {
-                    let chunkToSend = _accumulatedData
-                    _accumulatedData = Data()
+                    let split = streamingChunkSplit(
+                        _accumulatedData,
+                        chunkSize: streamChunkSize,
+                        includeRemainder: false
+                    )
+                    _accumulatedData = split.remainder
                     _lastSentTime = Date()
                     lock.unlock()
-                    Logger.info("🎬 [SEND-CHUNK] Sending \(chunkToSend.count) bytes", category: .audio)
-                    handler(chunkToSend)
+                    for chunk in split.chunks {
+                        Logger.info("🎬 [SEND-CHUNK] Sending \(chunk.count) bytes", category: .audio)
+                        handler(chunk)
+                    }
                     return
                 }
             }
@@ -677,11 +714,17 @@ fileprivate final class AudioState: @unchecked Sendable {
 
             // If handler is already set and we have enough data, send immediately
             if let handler = _streamingHandler, _accumulatedData.count >= streamChunkSize {
-                let preRollData = _accumulatedData
-                _accumulatedData = Data()
+                let split = streamingChunkSplit(
+                    _accumulatedData,
+                    chunkSize: streamChunkSize,
+                    includeRemainder: false
+                )
+                _accumulatedData = split.remainder
                 lock.unlock()
-                Logger.info("🎬 [A3] Sending pre-roll chunk: \(preRollData.count) bytes", category: .audio)
-                handler(preRollData)
+                for chunk in split.chunks {
+                    Logger.info("🎬 [A3] Sending pre-roll chunk: \(chunk.count) bytes", category: .audio)
+                    handler(chunk)
+                }
                 // Re-acquire lock for the rest of the function
                 lock.lock()
             }
