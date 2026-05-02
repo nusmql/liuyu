@@ -115,7 +115,7 @@ final class GLMRealtimeAdapterTests: XCTestCase {
         XCTAssertNil(GLMRealtimeAdapter.parseServerMessage(message))
     }
 
-    func testParseTranscriptionFailureAsError() {
+    func testParseTranscriptionFailureAsNoSpeechDetected() {
         let message = """
         {
           "type": "conversation.item.input_audio_transcription.failed",
@@ -127,10 +127,27 @@ final class GLMRealtimeAdapterTests: XCTestCase {
 
         let result = GLMRealtimeAdapter.parseServerMessage(message)
 
+        guard case .error(.noSpeechDetected) = result else {
+            return XCTFail("Expected noSpeechDetected, got \(String(describing: result))")
+        }
+    }
+
+    func testParseTranscriptionFailureAsServerError() {
+        let message = """
+        {
+          "type": "conversation.item.input_audio_transcription.failed",
+          "error": {
+            "message": "upstream unavailable"
+          }
+        }
+        """
+
+        let result = GLMRealtimeAdapter.parseServerMessage(message)
+
         guard case .error(let error) = result else {
             return XCTFail("Expected transcription error")
         }
-        XCTAssertTrue(error.localizedDescription.contains("asr_no_result"))
+        XCTAssertTrue(error.localizedDescription.contains("upstream unavailable"))
     }
 
     func testTransportMapsEmptyFinalToFailure() async {

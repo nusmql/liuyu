@@ -278,6 +278,41 @@ final class TranscriptionServiceTests: XCTestCase {
         XCTAssertEqual(Set(events.dropFirst().dropLast()), Set(["send:01:audio", "send:02:audio"]))
     }
 
+    func testStreamingSessionConnectReturnsBeforeQueuedDrainCompletes() async throws {
+        let strategy = BlockingStreamingStrategy()
+        let session = StreamingTranscriptionSession(
+            strategy: strategy,
+            config: TranscriptionConfig(apiKey: "key", endpoint: "wss://example.test/realtime", model: "test")
+        )
+
+        let sendTask = Task {
+            try await session.sendAudioChunk(Data([0x01]), isFinal: false)
+        }
+
+        var queuedDiagnostics = await session.diagnostics()
+        for _ in 0..<10 where queuedDiagnostics.pendingChunks == 0 {
+            try await Task.sleep(for: .milliseconds(5))
+            queuedDiagnostics = await session.diagnostics()
+        }
+        XCTAssertEqual(queuedDiagnostics.pendingChunks, 1)
+
+        try await session.connect()
+        await strategy.waitForSendStart()
+
+        let drainingDiagnostics = await session.diagnostics()
+        XCTAssertTrue(drainingDiagnostics.isConnected)
+        XCTAssertTrue(drainingDiagnostics.isDraining)
+        XCTAssertEqual(drainingDiagnostics.totalSentChunks, 0)
+
+        await strategy.unblockSend()
+        try await sendTask.value
+
+        let drainedDiagnostics = await session.diagnostics()
+        XCTAssertTrue(drainedDiagnostics.isConnected)
+        XCTAssertFalse(drainedDiagnostics.isDraining)
+        XCTAssertEqual(drainedDiagnostics.totalSentChunks, 1)
+    }
+
     func testStreamingSessionReportsQueueDiagnostics() async throws {
         let strategy = OrderedStreamingStrategy(sendDelay: .milliseconds(1))
         let session = StreamingTranscriptionSession(
@@ -378,5 +413,49 @@ private actor OrderedStreamingStrategy: TranscriptionStrategy {
 
     func snapshot() -> [String] {
         events
+    }
+}
+
+private actor BlockingStreamingStrategy: TranscriptionStrategy {
+    let strategyId = "blocking-streaming-test"
+    let supportsStreaming = true
+
+    private var events: [String] = []
+    private var sendStartedContinuation: CheckedContinuation<Void, Never>?
+    private var releaseSendContinuation: CheckedContinuation<Void, Never>?
+
+    func connect(config: TranscriptionConfig) async throws {
+        events.append("connect")
+    }
+
+    func sendAudio(_ data: Data, isFinal: Bool) async throws {
+        events.append("send")
+        sendStartedContinuation?.resume()
+        sendStartedContinuation = nil
+        await withCheckedContinuation { continuation in
+            releaseSendContinuation = continuation
+        }
+    }
+
+    nonisolated func receiveResults() -> AsyncStream<TranscriptionResult> {
+        AsyncStream { continuation in
+            continuation.finish()
+        }
+    }
+
+    func disconnect() async {}
+
+    func waitForSendStart() async {
+        if events.contains("send") {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            sendStartedContinuation = continuation
+        }
+    }
+
+    func unblockSend() {
+        releaseSendContinuation?.resume()
+        releaseSendContinuation = nil
     }
 }

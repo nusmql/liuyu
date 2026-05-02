@@ -308,6 +308,10 @@ public class EditViewModel: ObservableObject {
                 trace("streaming.queue.afterConnected", token: token, category: .stt, details: diagnostics.traceDetails)
             }
 
+            guard case .recording = editState else {
+                trace("streaming.connected.afterStop", token: token, category: .stt, details: "state=\(editState)")
+                return
+            }
             trace("recording.started.streaming", token: token)
         } catch {
             recordingFailed = true
@@ -403,6 +407,17 @@ public class EditViewModel: ObservableObject {
                             self.textAtRecordingStart = nil
                             self.finishTrace("streaming.edit.done", token: token, details: "textChars=\(self.text.count)")
                         }
+                    }
+                    await self.cleanupStreaming()
+                    return
+
+                case .error(.noSpeechDetected):
+                    self.trace("streaming.noSpeech", token: token, category: .stt)
+                    await MainActor.run {
+                        guard self.guardCurrentTrace(token, stage: "streaming.noSpeech.ui") else { return }
+                        self.editState = .idle
+                        self.textAtRecordingStart = nil
+                        self.finishTrace("streaming.done.noSpeech", token: token, details: "textChars=\(self.text.count)")
                     }
                     await self.cleanupStreaming()
                     return

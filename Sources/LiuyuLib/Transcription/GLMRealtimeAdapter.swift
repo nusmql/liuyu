@@ -236,6 +236,9 @@ public actor GLMRealtimeAdapter: WebSocketStrategy {
         case "conversation.item.input_audio_transcription.failed":
             let message = errorMessage(from: json) ?? "GLM Realtime transcription failed."
             Logger.error("[GLM Realtime] transcription failed: \(message)", category: .stt)
+            if isNoSpeechError(json: json, message: message) {
+                return .error(TranscriptionError.noSpeechDetected)
+            }
             return .error(TranscriptionError.serverError(500, message))
 
         case "error":
@@ -288,6 +291,11 @@ public actor GLMRealtimeAdapter: WebSocketStrategy {
             return error["message"] as? String
         }
         return json["message"] as? String
+    }
+
+    private nonisolated static func isNoSpeechError(json: [String: Any], message: String) -> Bool {
+        let code = (json["error"] as? [String: Any])?["code"] as? String
+        return code == "asr_no_result" || message.contains("asr_no_result")
     }
 
     private nonisolated static func eventID() -> String {

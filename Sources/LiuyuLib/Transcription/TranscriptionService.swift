@@ -81,7 +81,9 @@ public actor StreamingTranscriptionSession {
         do {
             try await strategy.connect(config: config)
             isConnected = true
-            try await drainQueuedChunksIfPossible()
+            Task { [weak self] in
+                try? await self?.drainQueuedChunksIfPossible()
+            }
         } catch {
             failQueuedChunks(error)
             throw error
