@@ -135,6 +135,13 @@ final class EditPipelineStateTests: XCTestCase {
         XCTAssertFalse(shouldQueueStreamingStartupStop(editState: .transcribing, hasStreamingStartup: true))
         XCTAssertFalse(shouldQueueStreamingStartupStop(editState: .editing, hasStreamingStartup: true))
     }
+
+    func testVisualAudioLevelIsClampedAndQuantized() {
+        XCTAssertEqual(visualAudioLevel(-0.1), 0)
+        XCTAssertEqual(visualAudioLevel(0.03), 0.05)
+        XCTAssertEqual(visualAudioLevel(0.52), 0.5)
+        XCTAssertEqual(visualAudioLevel(1.2), 1)
+    }
 }
 
 private func pcm16Data(repeating sample: Int16, sampleCount: Int) -> Data {

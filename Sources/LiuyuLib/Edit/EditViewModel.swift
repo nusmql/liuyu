@@ -107,6 +107,10 @@ func shouldQueueStreamingStartupStop(editState: EditState, hasStreamingStartup: 
     }
 }
 
+func visualAudioLevel(_ rawLevel: Float) -> Float {
+    max(0, min(1, (rawLevel * 20).rounded() / 20))
+}
+
 func pcm16DataFromWAV(_ wavData: Data) -> Data? {
     guard wavData.count >= 12,
           String(decoding: wavData[0..<4], as: UTF8.self) == "RIFF",
@@ -178,6 +182,7 @@ private func littleEndianUInt32(in data: Data, at offset: Int) -> UInt32? {
 public class EditViewModel: ObservableObject {
     @Published public var text: String = ""
     @Published public var editState: EditState = .idle
+    @Published public private(set) var audioLevel: Float = 0
     @Published public var errorMessage: String?
 
     private let recordingController = RecordingController()
@@ -224,18 +229,16 @@ public class EditViewModel: ObservableObject {
         }
     }
 
-    public var audioLevel: Float {
-        if case .recording(let level) = editState { return level }
-        return 0
-    }
-
     public init() {
         recordingController.$audioLevel
             .receive(on: RunLoop.main)
             .sink { [weak self] level in
                 guard let self, case .recording = self.editState else { return }
                 self.recordingPeakAudioLevel = max(self.recordingPeakAudioLevel, level)
-                self.editState = .recording(audioLevel: level)
+                let visualLevel = visualAudioLevel(level)
+                if abs(visualLevel - self.audioLevel) >= 0.05 {
+                    self.audioLevel = visualLevel
+                }
                 self.updateAudioActivity(level: level)
             }
             .store(in: &cancellables)
@@ -616,6 +619,7 @@ public class EditViewModel: ObservableObject {
         let traceToken = beginEditTrace(reason: hasText ? "voice-edit-recording" : "new-dictation-recording")
         textAtRecordingStart = hasText ? text : nil
         recordingPeakAudioLevel = 0
+        audioLevel = 0
         recordingFailed = false
         stopSilenceDetection()
         cleanupAudio()

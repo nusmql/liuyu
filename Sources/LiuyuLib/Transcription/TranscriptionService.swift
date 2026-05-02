@@ -167,7 +167,8 @@ public actor StreamingTranscriptionSession {
         let startSentBytes = totalSentBytes
         let startSentFinalChunks = totalSentFinalChunks
         let flushStart = Date()
-        if startDiagnostics.pendingChunks > 0 {
+        let logDrain = shouldLogDrain(diagnostics: startDiagnostics)
+        if logDrain {
             Logger.info("[StreamingSession] drain.begin \(startDiagnostics.traceDetails)", category: .stt)
         }
 
@@ -188,7 +189,7 @@ public actor StreamingTranscriptionSession {
             }
         }
 
-        if startDiagnostics.pendingChunks > 0 {
+        if logDrain {
             let drainedChunks = totalSentChunks - startSentChunks
             let drainedBytes = totalSentBytes - startSentBytes
             let drainedFinalChunks = totalSentFinalChunks - startSentFinalChunks
@@ -206,9 +207,16 @@ public actor StreamingTranscriptionSession {
 
     private func shouldLogEnqueue(diagnostics: StreamingQueueDiagnostics, isFinal: Bool) -> Bool {
         isFinal
-            || diagnostics.pendingChunks == 1
-            || diagnostics.pendingChunks % 10 == 0
-            || (diagnostics.pendingBytes >= 64_000 && diagnostics.pendingChunks % 5 == 0)
+            || diagnostics.pendingChunks >= 10
+            || diagnostics.pendingBytes >= 64_000
+            || (diagnostics.oldestPendingAge ?? 0) >= 0.5
+    }
+
+    private func shouldLogDrain(diagnostics: StreamingQueueDiagnostics) -> Bool {
+        diagnostics.pendingFinalChunks > 0
+            || diagnostics.pendingChunks >= 10
+            || diagnostics.pendingBytes >= 64_000
+            || (diagnostics.oldestPendingAge ?? 0) >= 0.5
     }
 
     private func makeDiagnostics(isDrainingOverride: Bool? = nil) -> StreamingQueueDiagnostics {
