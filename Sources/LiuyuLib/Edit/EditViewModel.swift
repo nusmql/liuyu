@@ -808,6 +808,7 @@ public class EditViewModel: ObservableObject {
     // MARK: - Actions
 
     public func clear() {
+        let keepIdleStreamingSession = editState == .idle
         invalidateEditTrace(reason: "clear")
         textAtRecordingStart = nil
         text = ""
@@ -816,7 +817,7 @@ public class EditViewModel: ObservableObject {
         stopSilenceDetection()
         cleanupAudio()
         Task {
-            await cleanupStreaming()
+            await cleanupStreaming(keepSessionAlive: keepIdleStreamingSession)
         }
     }
 
