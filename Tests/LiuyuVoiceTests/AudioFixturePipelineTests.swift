@@ -101,8 +101,14 @@ final class AudioFixturePipelineTests: XCTestCase {
                 data.append(frame.pcm16MonoData)
                 return data
             }, fixtureName)
-            XCTAssertEqual(snapshot.events.first, "prepare", fixtureName)
-            XCTAssertEqual(snapshot.events.last, "finish", fixtureName)
+            let expectedEvents = ["prepare"]
+                + expectedFrames.map { "send:\($0.sequence)" }
+                + ["finish"]
+            XCTAssertEqual(Array(snapshot.events.prefix(expectedEvents.count)), expectedEvents, fixtureName)
+            XCTAssertTrue(
+                snapshot.events.count == expectedEvents.count || snapshot.events == expectedEvents + ["cancel"],
+                "\(fixtureName): \(snapshot.events)"
+            )
             XCTAssertEqual(snapshot.events.filter { $0.hasPrefix("send:") }.count, expectedFrames.count, fixtureName)
             XCTAssertEqual(finalTexts, [fixtureName], fixtureName)
         }

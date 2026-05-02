@@ -14,6 +14,11 @@ enum StreamingPartialTextUpdate: Equatable {
     case replaceText(String)
 }
 
+enum StreamingStopDecision: Equatable {
+    case localNoSpeech
+    case sendFinalToProvider
+}
+
 private struct StreamingSessionKey: Equatable {
     let apiKey: String
     let endpoint: String
@@ -37,6 +42,83 @@ func streamingPartialTextUpdate(
     hadExistingTextAtRecordingStart ? .keepExistingText : .replaceText(partialText)
 }
 
+func isLocalNoSpeech(peakAudioLevel: Float, threshold: Float) -> Bool {
+    peakAudioLevel < threshold
+}
+
+func streamingStopDecision(peakAudioLevel: Float, threshold: Float) -> StreamingStopDecision {
+    isLocalNoSpeech(peakAudioLevel: peakAudioLevel, threshold: threshold)
+        ? .localNoSpeech
+        : .sendFinalToProvider
+}
+
+func pcm16DataFromWAV(_ wavData: Data) -> Data? {
+    guard wavData.count >= 12,
+          String(decoding: wavData[0..<4], as: UTF8.self) == "RIFF",
+          String(decoding: wavData[8..<12], as: UTF8.self) == "WAVE" else {
+        return nil
+    }
+
+    var offset = 12
+    while offset + 8 <= wavData.count {
+        let chunkID = String(decoding: wavData[offset..<offset + 4], as: UTF8.self)
+        guard let chunkSize = littleEndianUInt32(in: wavData, at: offset + 4) else {
+            return nil
+        }
+
+        let dataStart = offset + 8
+        let dataEnd = dataStart + Int(chunkSize)
+        guard dataEnd <= wavData.count else { return nil }
+
+        if chunkID == "data" {
+            return wavData.subdata(in: dataStart..<dataEnd)
+        }
+
+        offset = dataEnd + (Int(chunkSize) % 2)
+    }
+
+    return nil
+}
+
+func normalizedPCM16RMSAudioLevel(_ pcmData: Data) -> Float {
+    guard pcmData.count >= 2 else { return 0 }
+
+    var sampleCount = 0
+    var squareSum = 0.0
+    pcmData.withUnsafeBytes { rawBuffer in
+        let bytes = rawBuffer.bindMemory(to: UInt8.self)
+        var offset = 0
+        while offset + 1 < bytes.count {
+            let rawSample = UInt16(bytes[offset]) | (UInt16(bytes[offset + 1]) << 8)
+            let sample = Double(Int16(bitPattern: rawSample)) / 32768.0
+            squareSum += sample * sample
+            sampleCount += 1
+            offset += 2
+        }
+    }
+
+    guard sampleCount > 0 else { return 0 }
+    let rms = sqrt(squareSum / Double(sampleCount))
+    let db = 20 * log10(max(rms, 1e-6))
+    return Float(max(0, min(1, (db + 50) / 50)))
+}
+
+func normalizedWAVAudioLevel(at url: URL) -> Float? {
+    guard let wavData = try? Data(contentsOf: url),
+          let pcmData = pcm16DataFromWAV(wavData) else {
+        return nil
+    }
+    return normalizedPCM16RMSAudioLevel(pcmData)
+}
+
+private func littleEndianUInt32(in data: Data, at offset: Int) -> UInt32? {
+    guard offset + 4 <= data.count else { return nil }
+    return UInt32(data[offset])
+        | (UInt32(data[offset + 1]) << 8)
+        | (UInt32(data[offset + 2]) << 16)
+        | (UInt32(data[offset + 3]) << 24)
+}
+
 @MainActor
 public class EditViewModel: ObservableObject {
     @Published public var text: String = ""
@@ -50,8 +132,10 @@ public class EditViewModel: ObservableObject {
     private var currentAudioURL: URL?
     private var recordingFailed = false
     private var textAtRecordingStart: String?
+    private var recordingPeakAudioLevel: Float = 0
 
     private let minimumRecordingDuration: TimeInterval = 0.3
+    private let localNoSpeechPeakThreshold: Float = 0.06
     private var e2eStartTime: Date?
     private var editTraceToken = UUID()
     private var editTraceStartTime: Date?
@@ -91,6 +175,7 @@ public class EditViewModel: ObservableObject {
             .receive(on: RunLoop.main)
             .sink { [weak self] level in
                 guard let self, case .recording = self.editState else { return }
+                self.recordingPeakAudioLevel = max(self.recordingPeakAudioLevel, level)
                 self.editState = .recording(audioLevel: level)
                 self.updateAudioActivity(level: level)
             }
@@ -164,6 +249,11 @@ public class EditViewModel: ObservableObject {
 
     private func formatSeconds(_ value: TimeInterval) -> String {
         "\(String(format: "%.3f", value))s"
+    }
+
+    private func formatOptionalLevel(_ value: Float?) -> String {
+        guard let value else { return "none" }
+        return String(format: "%.3f", value)
     }
 
     private func updateAudioActivity(level: Float) {
@@ -305,6 +395,12 @@ public class EditViewModel: ObservableObject {
         }
     }
 
+    private func recycleStreamingSessionAfterTerminal(reason: String, token: UUID) async {
+        trace("streaming.session.recycle", token: token, category: .stt, details: "reason=\(reason)")
+        await cleanupStreaming()
+        scheduleStreamingPrewarm(reason: reason)
+    }
+
     // MARK: - Recording
 
     public func startRecording() {
@@ -313,6 +409,7 @@ public class EditViewModel: ObservableObject {
         // Fail-safe: reset any stuck state from previous errors
         let traceToken = beginEditTrace(reason: hasText ? "voice-edit-recording" : "new-dictation-recording")
         textAtRecordingStart = hasText ? text : nil
+        recordingPeakAudioLevel = 0
         recordingFailed = false
         stopSilenceDetection()
         cleanupAudio()
@@ -513,7 +610,6 @@ public class EditViewModel: ObservableObject {
                 case .final(let text):
                     handledTerminalResult = true
                     self.trace("streaming.final", token: token, category: .stt, details: "chars=\(text.count)")
-                    self.trace("streaming.session.keepAlive", token: token, category: .stt)
                     let shouldEdit = await MainActor.run { () -> Bool in
                         guard self.guardCurrentTrace(token, stage: "streaming.final.ui") else { return false }
                         guard !text.isEmpty else {
@@ -543,20 +639,19 @@ public class EditViewModel: ObservableObject {
                             self.finishTrace("streaming.edit.done", token: token, details: "textChars=\(self.text.count)")
                         }
                     }
-                    await self.cleanupStreaming(keepSessionAlive: true)
+                    await self.recycleStreamingSessionAfterTerminal(reason: "after-final", token: token)
                     return
 
                 case .error(.noSpeechDetected):
                     handledTerminalResult = true
                     self.trace("streaming.noSpeech", token: token, category: .stt)
-                    self.trace("streaming.session.keepAlive", token: token, category: .stt)
                     await MainActor.run {
                         guard self.guardCurrentTrace(token, stage: "streaming.noSpeech.ui") else { return }
                         self.editState = .idle
                         self.textAtRecordingStart = nil
                         self.finishTrace("streaming.done.noSpeech", token: token, details: "textChars=\(self.text.count)")
                     }
-                    await self.cleanupStreaming(keepSessionAlive: true)
+                    await self.recycleStreamingSessionAfterTerminal(reason: "after-no-speech", token: token)
                     return
 
                 case .error(let error):
@@ -601,9 +696,10 @@ public class EditViewModel: ObservableObject {
             return
         }
 
-        await streamingSession?.disconnect()
+        let sessionToDisconnect = streamingSession
         streamingSession = nil
         streamingSessionKey = nil
+        await sessionToDisconnect?.disconnect()
     }
 
     public func stopRecording() {
@@ -655,10 +751,36 @@ public class EditViewModel: ObservableObject {
         // Stop recording first - this waits for audio engine to finish processing.
         let audioURL = recordingController.stop()
         trace("streaming.audio.stopped", token: token, category: .audio)
+        let fileAudioLevel: Float?
         if let audioURL {
             currentAudioURL = audioURL
             let audioBytes = ((try? FileManager.default.attributesOfItem(atPath: audioURL.path)[.size]) as? Int) ?? 0
-            trace("streaming.localWav.ready", token: token, category: .audio, details: "audioBytes=\(audioBytes) path=\(audioURL.path)")
+            fileAudioLevel = normalizedWAVAudioLevel(at: audioURL)
+            trace(
+                "streaming.localWav.ready",
+                token: token,
+                category: .audio,
+                details: "audioBytes=\(audioBytes) uiPeak=\(String(format: "%.3f", recordingPeakAudioLevel)) wavLevel=\(formatOptionalLevel(fileAudioLevel)) path=\(audioURL.path)"
+            )
+        } else {
+            fileAudioLevel = nil
+        }
+
+        let peakLevel = max(recordingPeakAudioLevel, fileAudioLevel ?? 0)
+        if streamingStopDecision(peakAudioLevel: peakLevel, threshold: localNoSpeechPeakThreshold) == .localNoSpeech {
+            trace(
+                "streaming.localNoSpeech",
+                token: token,
+                category: .audio,
+                details: "peak=\(String(format: "%.3f", peakLevel)) threshold=\(String(format: "%.3f", localNoSpeechPeakThreshold))"
+            )
+            recordingController.clearStreamingState()
+            editState = .idle
+            textAtRecordingStart = nil
+            finishTrace("streaming.done.localNoSpeech", token: token, details: "textChars=\(text.count)")
+            await cleanupStreaming()
+            scheduleStreamingPrewarm(reason: "after-local-no-speech")
+            return
         }
 
         editState = editStateAfterRecordingStops(hasExistingText: textAtRecordingStart != nil)
