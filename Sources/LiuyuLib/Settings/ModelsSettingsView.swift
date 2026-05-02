@@ -2,9 +2,35 @@
 import SwiftUI
 
 struct ProvidersSettingsView: View {
+    private enum IFlytekCredentialMode: String, CaseIterable, Identifiable {
+        case hmac = "API Key"
+        case oauth2 = "OAuth2"
+
+        var id: String { rawValue }
+    }
+
+    private enum CredentialInputError: LocalizedError {
+        case incompleteIFlytekHMAC
+        case incompleteIFlytekOAuth2
+
+        var errorDescription: String? {
+            switch self {
+            case .incompleteIFlytekHMAC:
+                return "Fill APPID, APIKey, and APISecret"
+            case .incompleteIFlytekOAuth2:
+                return "Fill APPID and OAuth2 token"
+            }
+        }
+    }
+
     @State private var providers: [ProviderConfig] = []
     @State private var selectedProviderID: UUID?
     @State private var editingApiKey: String = ""
+    @State private var iflytekCredentialMode: IFlytekCredentialMode = .hmac
+    @State private var iflytekAppID: String = ""
+    @State private var iflytekAPIKey: String = ""
+    @State private var iflytekAPISecret: String = ""
+    @State private var iflytekOAuthToken: String = ""
     @State private var hasExistingKey: Bool = false
     @State private var saveMessage: String?
 
@@ -87,8 +113,7 @@ struct ProvidersSettingsView: View {
                     }
                 }
 
-                SecureField("API Key", text: $editingApiKey,
-                            prompt: Text(apiKeyPrompt(for: providers[index])))
+                credentialFields(for: providers[index])
 
                 TextField("Custom Base URL (optional)", text: Binding(
                     get: { providers[index].baseURL ?? "" },
@@ -110,6 +135,36 @@ struct ProvidersSettingsView: View {
                     }
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func credentialFields(for provider: ProviderConfig) -> some View {
+        if provider.provider == .iflytek {
+            Picker("Auth", selection: $iflytekCredentialMode) {
+                ForEach(IFlytekCredentialMode.allCases) { mode in
+                    Text(mode.rawValue).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            SecureField("APPID", text: $iflytekAppID,
+                        prompt: Text(hasExistingKey ? "Saved" : "APPID"))
+                .textContentType(.username)
+
+            switch iflytekCredentialMode {
+            case .hmac:
+                SecureField("APIKey", text: $iflytekAPIKey,
+                            prompt: Text(hasExistingKey ? "Saved" : "APIKey"))
+                SecureField("APISecret", text: $iflytekAPISecret,
+                            prompt: Text(hasExistingKey ? "Saved" : "APISecret"))
+            case .oauth2:
+                SecureField("Access Token", text: $iflytekOAuthToken,
+                            prompt: Text(hasExistingKey ? "Saved" : "OAuth2 token"))
+            }
+        } else {
+            SecureField("API Key", text: $editingApiKey,
+                        prompt: Text(apiKeyPrompt(for: provider)))
         }
     }
 
@@ -141,7 +196,7 @@ struct ProvidersSettingsView: View {
 
     private func selectProvider(_ provider: ProviderConfig) {
         selectedProviderID = provider.id
-        editingApiKey = ""
+        clearCredentialInputs()
         hasExistingKey = store.apiKey(for: provider) != nil
     }
 
@@ -167,7 +222,7 @@ struct ProvidersSettingsView: View {
             return "Key saved \u{2713}"
         }
         if provider.provider == .iflytek {
-            return "APPID|APIKey|APISecret or oauth2|APPID|Token"
+            return "Enter iFLYTEK credentials"
         }
         return "Enter API key"
     }
@@ -187,16 +242,17 @@ struct ProvidersSettingsView: View {
 
     private func saveAll() {
         if let selectedId = selectedProviderID,
-           let provider = providers.first(where: { $0.id == selectedId }),
-           !editingApiKey.isEmpty {
+           let provider = providers.first(where: { $0.id == selectedId }) {
             do {
-                try store.saveApiKey(editingApiKey, for: provider)
-                hasExistingKey = true
-                editingApiKey = ""
-                Logger.info("API Key saved successfully for \(provider.provider.rawValue)", category: .settings)
+                if let credential = try credentialValueToSave(for: provider) {
+                    try store.saveApiKey(credential, for: provider)
+                    hasExistingKey = true
+                    clearCredentialInputs()
+                    Logger.info("API Key saved successfully for \(provider.provider.rawValue)", category: .settings)
+                }
             } catch {
                 Logger.error("Failed to save API Key: \(error)", category: .settings)
-                saveMessage = "Save failed"
+                saveMessage = error.localizedDescription
                 return
             }
         }
@@ -208,5 +264,40 @@ struct ProvidersSettingsView: View {
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             saveMessage = nil
         }
+    }
+
+    private func credentialValueToSave(for provider: ProviderConfig) throws -> String? {
+        if provider.provider == .iflytek {
+            let appID = iflytekAppID.trimmingCharacters(in: .whitespacesAndNewlines)
+            let apiKey = iflytekAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            let apiSecret = iflytekAPISecret.trimmingCharacters(in: .whitespacesAndNewlines)
+            let oauthToken = iflytekOAuthToken.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            switch iflytekCredentialMode {
+            case .hmac:
+                guard !appID.isEmpty || !apiKey.isEmpty || !apiSecret.isEmpty else { return nil }
+                guard !appID.isEmpty, !apiKey.isEmpty, !apiSecret.isEmpty else {
+                    throw CredentialInputError.incompleteIFlytekHMAC
+                }
+                return "\(appID)|\(apiKey)|\(apiSecret)"
+            case .oauth2:
+                guard !appID.isEmpty || !oauthToken.isEmpty else { return nil }
+                guard !appID.isEmpty, !oauthToken.isEmpty else {
+                    throw CredentialInputError.incompleteIFlytekOAuth2
+                }
+                return "oauth2|\(appID)|\(oauthToken)"
+            }
+        }
+
+        let key = editingApiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        return key.isEmpty ? nil : key
+    }
+
+    private func clearCredentialInputs() {
+        editingApiKey = ""
+        iflytekAppID = ""
+        iflytekAPIKey = ""
+        iflytekAPISecret = ""
+        iflytekOAuthToken = ""
     }
 }
