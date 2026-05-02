@@ -84,6 +84,15 @@ func streamingRESTFallbackParams(
     }
 }
 
+func isWebSocketStreamingFormat(_ apiFormat: ApiFormat) -> Bool {
+    switch apiFormat {
+    case .glmRealtime, .alibabaRealtime, .tencentRealtime, .iflytekIAT:
+        return true
+    case .whisperMultipart, .glmMultipartEventStream, .chatCompletionsAudio:
+        return false
+    }
+}
+
 func pcm16DataFromWAV(_ wavData: Data) -> Data? {
     guard wavData.count >= 12,
           String(decoding: wavData[0..<4], as: UTF8.self) == "RIFF",
@@ -588,7 +597,7 @@ public class EditViewModel: ObservableObject {
         if let stt = feature.sttPrimary {
             if let params = providerStore.resolveSTT(stt) {
                 trace("stt.resolved", token: traceToken, details: "model=\(params.model) format=\(params.apiFormat.rawValue)")
-                if params.apiFormat == .glmRealtime || params.apiFormat == .alibabaRealtime || params.apiFormat == .tencentRealtime {
+                if isWebSocketStreamingFormat(params.apiFormat) {
                     // Use streaming for WebSocket-based providers
                     Task {
                         await startStreamingRecording(params: params, token: traceToken)

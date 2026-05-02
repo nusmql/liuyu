@@ -104,6 +104,17 @@ final class EditPipelineStateTests: XCTestCase {
             language: nil
         ))
     }
+
+    func testWebSocketStreamingFormatIncludesIFlytekIAT() {
+        XCTAssertTrue(isWebSocketStreamingFormat(.glmRealtime))
+        XCTAssertTrue(isWebSocketStreamingFormat(.alibabaRealtime))
+        XCTAssertTrue(isWebSocketStreamingFormat(.tencentRealtime))
+        XCTAssertTrue(isWebSocketStreamingFormat(.iflytekIAT))
+
+        XCTAssertFalse(isWebSocketStreamingFormat(.whisperMultipart))
+        XCTAssertFalse(isWebSocketStreamingFormat(.glmMultipartEventStream))
+        XCTAssertFalse(isWebSocketStreamingFormat(.chatCompletionsAudio))
+    }
 }
 
 private func pcm16Data(repeating sample: Int16, sampleCount: Int) -> Data {
