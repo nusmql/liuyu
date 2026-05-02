@@ -72,6 +72,33 @@ final class EditPipelineStateTests: XCTestCase {
             .localNoSpeech
         )
     }
+
+    func testGLMRealtimeUsesGLMRESTFallbackParams() throws {
+        let params = try XCTUnwrap(streamingRESTFallbackParams(
+            apiKey: "glm-key",
+            apiFormat: .glmRealtime,
+            language: "zh"
+        ))
+
+        XCTAssertEqual(params.apiKey, "glm-key")
+        XCTAssertEqual(params.endpoint, "https://open.bigmodel.cn/api/paas/v4/audio/transcriptions")
+        XCTAssertEqual(params.model, "glm-asr-2512")
+        XCTAssertEqual(params.apiFormat, .whisperMultipart)
+        XCTAssertEqual(params.language, "zh")
+    }
+
+    func testNonRealtimeStreamingDoesNotUseEditWindowRESTFallback() {
+        XCTAssertNil(streamingRESTFallbackParams(
+            apiKey: "key",
+            apiFormat: .whisperMultipart,
+            language: nil
+        ))
+        XCTAssertNil(streamingRESTFallbackParams(
+            apiKey: "key",
+            apiFormat: .alibabaRealtime,
+            language: nil
+        ))
+    }
 }
 
 private func pcm16Data(repeating sample: Int16, sampleCount: Int) -> Data {

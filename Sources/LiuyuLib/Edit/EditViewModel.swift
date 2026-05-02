@@ -19,6 +19,14 @@ enum StreamingStopDecision: Equatable {
     case sendFinalToProvider
 }
 
+struct StreamingRESTFallbackParams {
+    let apiKey: String
+    let endpoint: String
+    let model: String
+    let apiFormat: ApiFormat
+    let language: String?
+}
+
 private struct StreamingSessionKey: Equatable {
     let apiKey: String
     let endpoint: String
@@ -50,6 +58,29 @@ func streamingStopDecision(peakAudioLevel: Float, threshold: Float) -> Streaming
     isLocalNoSpeech(peakAudioLevel: peakAudioLevel, threshold: threshold)
         ? .localNoSpeech
         : .sendFinalToProvider
+}
+
+func streamingRESTFallbackParams(
+    apiKey: String,
+    apiFormat: ApiFormat,
+    language: String?
+) -> StreamingRESTFallbackParams? {
+    switch apiFormat {
+    case .glmRealtime:
+        return StreamingRESTFallbackParams(
+            apiKey: apiKey,
+            endpoint: "https://open.bigmodel.cn/api/paas/v4/audio/transcriptions",
+            model: "glm-asr-2512",
+            apiFormat: .whisperMultipart,
+            language: language
+        )
+    case .whisperMultipart,
+         .glmMultipartEventStream,
+         .chatCompletionsAudio,
+         .alibabaRealtime,
+         .tencentRealtime:
+        return nil
+    }
 }
 
 func pcm16DataFromWAV(_ wavData: Data) -> Data? {
@@ -146,6 +177,8 @@ public class EditViewModel: ObservableObject {
     private var streamingSessionKey: StreamingSessionKey?
     private var streamingTask: Task<Void, Never>?
     private var streamingPrewarmTask: Task<Void, Never>?
+    private var streamingRESTFallbackTask: Task<Void, Never>?
+    private var streamingRESTFallbackWinningToken: UUID?
 
     // Silence timeout
     private var silenceCheckTimer: Timer?
@@ -401,10 +434,139 @@ public class EditViewModel: ObservableObject {
         scheduleStreamingPrewarm(reason: reason)
     }
 
+    private func startStreamingRESTFallbackIfAvailable(audioURL: URL, token: UUID) {
+        guard let sessionKey = streamingSessionKey,
+              let fallback = streamingRESTFallbackParams(
+                apiKey: sessionKey.apiKey,
+                apiFormat: sessionKey.apiFormat,
+                language: sessionKey.language
+              ) else {
+            return
+        }
+
+        streamingRESTFallbackTask?.cancel()
+        streamingRESTFallbackTask = Task { [weak self] in
+            guard let self else { return }
+            await MainActor.run {
+                self.trace(
+                    "streaming.restFallback.begin",
+                    token: token,
+                    category: .stt,
+                    details: "model=\(fallback.model) format=\(fallback.apiFormat.rawValue)"
+                )
+            }
+
+            let start = Date()
+            let service = TranscriptionService(
+                apiKey: fallback.apiKey,
+                endpoint: fallback.endpoint,
+                model: fallback.model,
+                language: fallback.language,
+                apiFormat: fallback.apiFormat
+            )
+
+            do {
+                let fallbackText = try await service.transcribe(audioFileURL: audioURL)
+                guard !Task.isCancelled else { return }
+                let duration = Date().timeIntervalSince(start)
+                let applied = await self.applyStreamingRESTFallbackResult(
+                    fallbackText,
+                    token: token,
+                    duration: duration
+                )
+                guard applied else { return }
+
+                await MainActor.run {
+                    self.streamingRESTFallbackTask = nil
+                    self.invalidateEditTrace(reason: "rest-fallback-won")
+                    self.streamingRESTFallbackWinningToken = nil
+                }
+                await self.cleanupStreaming(cancelRESTFallback: false)
+                await MainActor.run {
+                    self.scheduleStreamingPrewarm(reason: "after-rest-fallback")
+                }
+            } catch {
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    guard self.guardCurrentTrace(token, stage: "streaming.restFallback.failed") else { return }
+                    guard self.editState == .transcribing else { return }
+                    self.trace(
+                        "streaming.restFallback.failed",
+                        token: token,
+                        category: .stt,
+                        details: "duration=\(self.formatSeconds(Date().timeIntervalSince(start))) error=\(error.localizedDescription)"
+                    )
+                    self.streamingRESTFallbackTask = nil
+                }
+            }
+        }
+    }
+
+    private func applyStreamingRESTFallbackResult(
+        _ fallbackText: String,
+        token: UUID,
+        duration: TimeInterval
+    ) async -> Bool {
+        guard guardCurrentTrace(token, stage: "streaming.restFallback.apply") else { return false }
+        guard editState == .transcribing else {
+            trace(
+                "streaming.restFallback.ignored",
+                token: token,
+                category: .stt,
+                details: "state=\(editState)"
+            )
+            return false
+        }
+
+        let trimmed = fallbackText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            trace(
+                "streaming.restFallback.empty",
+                token: token,
+                category: .stt,
+                details: "duration=\(formatSeconds(duration))"
+            )
+            return false
+        }
+
+        trace(
+            "streaming.restFallback.api.done",
+            token: token,
+            category: .stt,
+            details: "duration=\(formatSeconds(duration)) chars=\(trimmed.count)"
+        )
+        streamingRESTFallbackWinningToken = token
+
+        if let originalText = textAtRecordingStart {
+            text = originalText
+            editState = editStateAfterTranscriptionCompletes(hasExistingText: true)
+            trace(
+                "ui.state.editing",
+                token: token,
+                category: .ui,
+                details: "instructionChars=\(trimmed.count) textChars=\(text.count) source=restFallback"
+            )
+            let feature = providerStore.loadFeatureConfig()
+            await editWithLLM(instruction: trimmed, feature: feature, token: token)
+            textAtRecordingStart = nil
+            finishTrace("streaming.restFallback.edit.done", token: token, details: "textChars=\(text.count)")
+        } else {
+            text = trimmed
+            editState = .idle
+            textAtRecordingStart = nil
+            finishTrace("streaming.restFallback.done", token: token, details: "textChars=\(text.count)")
+        }
+
+        return true
+    }
+
     // MARK: - Recording
 
     public func startRecording() {
         cancelStreamingPrewarm()
+        streamingRESTFallbackTask?.cancel()
+        streamingRESTFallbackTask = nil
+        streamingRESTFallbackWinningToken = nil
 
         // Fail-safe: reset any stuck state from previous errors
         let traceToken = beginEditTrace(reason: hasText ? "voice-edit-recording" : "new-dictation-recording")
@@ -590,6 +752,10 @@ public class EditViewModel: ObservableObject {
             for await result in session.receiveResults() {
                 guard !Task.isCancelled else { break }
                 guard self.guardCurrentTrace(token, stage: "streaming.result") else { return }
+                guard self.streamingRESTFallbackWinningToken != token else {
+                    self.trace("streaming.result.ignored.restFallbackWon", token: token, category: .stt)
+                    return
+                }
 
                 switch result {
                 case .partial(let text):
@@ -680,9 +846,18 @@ public class EditViewModel: ObservableObject {
     }
 
     /// Cleanup streaming resources
-    private func cleanupStreaming(stopAudio: Bool = false, keepSessionAlive: Bool = false) async {
+    private func cleanupStreaming(
+        stopAudio: Bool = false,
+        keepSessionAlive: Bool = false,
+        cancelRESTFallback: Bool = true
+    ) async {
         streamingTask?.cancel()
         streamingTask = nil
+        if cancelRESTFallback {
+            streamingRESTFallbackTask?.cancel()
+            streamingRESTFallbackTask = nil
+            streamingRESTFallbackWinningToken = nil
+        }
         if stopAudio {
             if let audioURL = recordingController.stop() {
                 RecordingController.deleteRecording(at: audioURL)
@@ -785,6 +960,9 @@ public class EditViewModel: ObservableObject {
 
         editState = editStateAfterRecordingStops(hasExistingText: textAtRecordingStart != nil)
         trace("ui.state.transcribing", token: token, category: .ui, details: "willEdit=\(textAtRecordingStart != nil) textChars=\(text.count)")
+        if let audioURL {
+            startStreamingRESTFallbackIfAvailable(audioURL: audioURL, token: token)
+        }
 
         // Flush any remaining accumulated audio data
         // CRITICAL: Must call this AFTER stop() which waits for audio engine
@@ -804,6 +982,8 @@ public class EditViewModel: ObservableObject {
             if let data = flushedData, !data.isEmpty {
                 trace("streaming.flush.send.begin", token: token, category: .stt, details: "bytes=\(data.count)")
                 try await streamingSession?.sendAudioChunk(data, isFinal: false)
+                guard streamingRESTFallbackWinningToken != token else { return }
+                guard guardCurrentTrace(token, stage: "streaming.flush.send.done") else { return }
                 trace("streaming.flush.send.done", token: token, category: .stt)
                 if let diagnostics = await streamingSession?.diagnostics() {
                     trace("streaming.queue.afterFlushSend", token: token, category: .stt, details: diagnostics.traceDetails)
@@ -811,22 +991,26 @@ public class EditViewModel: ObservableObject {
             }
 
             // Now send final chunk to indicate end of stream
+            guard streamingRESTFallbackWinningToken != token else { return }
+            guard guardCurrentTrace(token, stage: "streaming.beforeFinalSend") else { return }
             if let diagnostics = await streamingSession?.diagnostics() {
                 trace("streaming.queue.beforeFinalSend", token: token, category: .stt, details: diagnostics.traceDetails)
             }
             trace("streaming.final.send.begin", token: token, category: .stt)
             try await streamingSession?.sendAudioChunk(Data(), isFinal: true)
+            guard streamingRESTFallbackWinningToken != token else { return }
+            guard guardCurrentTrace(token, stage: "streaming.final.send.done") else { return }
             trace("streaming.final.send.done", token: token, category: .stt)
             if let diagnostics = await streamingSession?.diagnostics() {
                 trace("streaming.queue.afterFinalSend", token: token, category: .stt, details: diagnostics.traceDetails)
             }
         } catch {
+            guard streamingRESTFallbackWinningToken != token else { return }
+            guard guardCurrentTrace(token, stage: "streaming.finish.error") else { return }
             Logger.error("Failed to send final chunk: \(error)", category: .stt)
-            if guardCurrentTrace(token, stage: "streaming.finish.error") {
-                errorMessage = error.localizedDescription
-                editState = .idle
-                textAtRecordingStart = nil
-            }
+            errorMessage = error.localizedDescription
+            editState = .idle
+            textAtRecordingStart = nil
             await cleanupStreaming()
         }
 
