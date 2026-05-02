@@ -98,6 +98,16 @@ func shouldConnectBeforeRecordingStart(_ apiFormat: ApiFormat) -> Bool {
     isWebSocketStreamingFormat(apiFormat)
 }
 
+func shouldPrewarmStreamingSession(_ apiFormat: ApiFormat) -> Bool {
+    switch apiFormat {
+    case .glmRealtime:
+        return true
+    case .alibabaRealtime, .tencentRealtime, .iflytekIAT,
+         .whisperMultipart, .glmMultipartEventStream, .chatCompletionsAudio:
+        return false
+    }
+}
+
 func shouldQueueStreamingStartupStop(editState: EditState, hasStreamingStartup: Bool) -> Bool {
     switch editState {
     case .idle, .connecting:
@@ -416,7 +426,7 @@ public class EditViewModel: ObservableObject {
         let feature = providerStore.loadFeatureConfig()
         guard let stt = feature.sttPrimary,
               let params = providerStore.resolveSTT(stt),
-              isWebSocketStreamingFormat(params.apiFormat) else {
+              shouldPrewarmStreamingSession(params.apiFormat) else {
             return
         }
 
@@ -678,6 +688,7 @@ public class EditViewModel: ObservableObject {
                 streamingStartupToken = nil
             }
         }
+        cancelStreamingPrewarm()
         trace("streaming.start", token: token, details: "model=\(params.model) format=\(params.apiFormat.rawValue)")
 
         let sessionKey = makeStreamingSessionKey(params: params)
@@ -717,8 +728,17 @@ public class EditViewModel: ObservableObject {
             recordingController.setStreamingChunkSizeBytes(chunkSize)
             trace("streaming.chunk.config", token: token, category: .audio, details: "bytes=\(chunkSize)")
 
-            // STEP 1: Register the handler before capture starts. The session buffers
-            // chunks until the WebSocket connection is ready.
+            if connectBeforeRecording {
+                // Keep the engine warm while connecting so speech that starts
+                // immediately after the user clicks is retained in pre-roll.
+                trace("streaming.audio.prewarm.begin", token: token, category: .audio)
+                try recordingController.restartWarmUp()
+                trace("streaming.audio.prewarm.ready", token: token, category: .audio)
+            }
+
+            // STEP 1: Register the handler before formal recording starts. Any
+            // pre-roll collected during warm-up is flushed through this handler
+            // when startStreaming(saveToFile:) begins.
             recordingController.setStreamingHandler { [weak self] chunk in
                 Task { [weak self] in
                     do {
@@ -734,12 +754,6 @@ public class EditViewModel: ObservableObject {
             startStreamingResultsListener(token: token)
 
             if connectBeforeRecording {
-                // Keep the engine warm while connecting so speech that starts
-                // immediately after the user clicks is retained in pre-roll.
-                trace("streaming.audio.prewarm.begin", token: token, category: .audio)
-                try recordingController.restartWarmUp()
-                trace("streaming.audio.prewarm.ready", token: token, category: .audio)
-
                 // Connect before starting formal recording. This avoids provider
                 // backlog during slow WebSocket handshakes and keeps paced
                 // protocols from replaying audio after the user releases.

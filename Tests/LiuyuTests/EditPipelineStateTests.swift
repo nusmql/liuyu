@@ -126,6 +126,16 @@ final class EditPipelineStateTests: XCTestCase {
         XCTAssertFalse(shouldConnectBeforeRecordingStart(.chatCompletionsAudio))
     }
 
+    func testOnlyGLMRealtimeUsesIdlePrewarm() {
+        XCTAssertTrue(shouldPrewarmStreamingSession(.glmRealtime))
+        XCTAssertFalse(shouldPrewarmStreamingSession(.alibabaRealtime))
+        XCTAssertFalse(shouldPrewarmStreamingSession(.tencentRealtime))
+        XCTAssertFalse(shouldPrewarmStreamingSession(.iflytekIAT))
+        XCTAssertFalse(shouldPrewarmStreamingSession(.whisperMultipart))
+        XCTAssertFalse(shouldPrewarmStreamingSession(.glmMultipartEventStream))
+        XCTAssertFalse(shouldPrewarmStreamingSession(.chatCompletionsAudio))
+    }
+
     func testStopDuringStreamingStartupIsQueuedBeforeRecordingBegins() {
         XCTAssertTrue(shouldQueueStreamingStartupStop(editState: .idle, hasStreamingStartup: true))
         XCTAssertTrue(shouldQueueStreamingStartupStop(editState: .connecting, hasStreamingStartup: true))
