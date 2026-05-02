@@ -184,10 +184,11 @@ public class RecordingController: ObservableObject {
         try startInternal(skipFileCreation: false)
     }
 
-    /// Start recording in streaming mode (no file creation).
+    /// Start recording in streaming mode.
     /// Used for WebSocket streaming where audio is sent directly to server.
-    public func startStreaming() throws {
-        try startInternal(skipFileCreation: true)
+    /// When `saveToFile` is true, a local WAV is written for diagnostics and fallback.
+    public func startStreaming(saveToFile: Bool = false) throws {
+        try startInternal(skipFileCreation: !saveToFile)
     }
 
     private func startInternal(skipFileCreation: Bool) throws {
@@ -667,7 +668,7 @@ fileprivate final class AudioState: @unchecked Sendable {
                 }
             }
 
-            // Write to file if provided (non-streaming mode)
+            // Write to file when a recording file or streaming diagnostic file is active.
             if let audioWriter {
                 for buffer in _preRollBuffers {
                     audioWriter.write(buffer)

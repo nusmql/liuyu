@@ -61,6 +61,7 @@ public class EditViewModel: ObservableObject {
     private var streamingSession: StreamingTranscriptionSession?
     private var streamingSessionKey: StreamingSessionKey?
     private var streamingTask: Task<Void, Never>?
+    private var streamingPrewarmTask: Task<Void, Never>?
 
     // Silence timeout
     private var silenceCheckTimer: Timer?
@@ -106,6 +107,7 @@ public class EditViewModel: ObservableObject {
                 Logger.warning("Pre-warm failed (will retry on first recording): \(error.localizedDescription)", category: .audio)
             }
         }
+        scheduleStreamingPrewarm(reason: "startup")
     }
 
     @discardableResult
@@ -199,9 +201,115 @@ public class EditViewModel: ObservableObject {
         silenceCheckTimer = nil
     }
 
+    private func makeStreamingSessionKey(
+        params: (apiKey: String, endpoint: String, model: String, apiFormat: ApiFormat)
+    ) -> StreamingSessionKey {
+        let language = UserDefaults.standard.string(forKey: "language") ?? "auto"
+        return StreamingSessionKey(
+            apiKey: params.apiKey,
+            endpoint: params.endpoint,
+            model: params.model,
+            apiFormat: params.apiFormat,
+            language: language == "auto" ? nil : language
+        )
+    }
+
+    private func makeStreamingSession(
+        params: (apiKey: String, endpoint: String, model: String, apiFormat: ApiFormat),
+        key: StreamingSessionKey
+    ) -> StreamingTranscriptionSession {
+        let service = TranscriptionService(
+            apiKey: params.apiKey,
+            endpoint: params.endpoint,
+            model: params.model,
+            language: key.language,
+            apiFormat: params.apiFormat
+        )
+        return service.createStreamingSession()
+    }
+
+    private func cancelStreamingPrewarm() {
+        streamingPrewarmTask?.cancel()
+        streamingPrewarmTask = nil
+    }
+
+    private func scheduleStreamingPrewarm(reason: String) {
+        cancelStreamingPrewarm()
+        streamingPrewarmTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            guard !Task.isCancelled else { return }
+            await self?.prewarmStreamingSessionIfNeeded(reason: reason)
+        }
+    }
+
+    private func prewarmStreamingSessionIfNeeded(reason: String) async {
+        guard editState == .idle else { return }
+
+        let feature = providerStore.loadFeatureConfig()
+        guard let stt = feature.sttPrimary,
+              let params = providerStore.resolveSTT(stt),
+              params.apiFormat == .glmRealtime else {
+            return
+        }
+
+        let key = makeStreamingSessionKey(params: params)
+        if let existingSession = streamingSession,
+           streamingSessionKey == key,
+           await existingSession.connected {
+            Logger.info("[StreamingPrewarm] already connected reason=\(reason) model=\(params.model)", category: .stt)
+            return
+        }
+
+        let session = makeStreamingSession(params: params, key: key)
+        let start = Date()
+        Logger.info("[StreamingPrewarm] connect.begin reason=\(reason) model=\(params.model)", category: .stt)
+        do {
+            try await session.connect()
+            guard !Task.isCancelled, editState == .idle else {
+                await session.disconnect()
+                Logger.info("[StreamingPrewarm] discarded reason=\(reason) model=\(params.model)", category: .stt)
+                return
+            }
+
+            if let existingSession = streamingSession {
+                if streamingSessionKey == key, await existingSession.connected {
+                    await session.disconnect()
+                    Logger.info("[StreamingPrewarm] already connected reason=\(reason) model=\(params.model)", category: .stt)
+                    return
+                }
+
+                guard streamingSessionKey == key else {
+                    await session.disconnect()
+                    Logger.info("[StreamingPrewarm] discarded reason=\(reason) model=\(params.model) existingSession=true", category: .stt)
+                    return
+                }
+
+                await existingSession.disconnect()
+            }
+
+            streamingSession = session
+            streamingSessionKey = key
+            Logger.info(
+                "[StreamingPrewarm] connect.done reason=\(reason) model=\(params.model) duration=\(formatSeconds(Date().timeIntervalSince(start)))",
+                category: .stt
+            )
+        } catch {
+            if Task.isCancelled {
+                await session.disconnect()
+                return
+            }
+            Logger.warning(
+                "[StreamingPrewarm] connect.failed reason=\(reason) model=\(params.model) duration=\(formatSeconds(Date().timeIntervalSince(start))) error=\(error.localizedDescription)",
+                category: .stt
+            )
+        }
+    }
+
     // MARK: - Recording
 
     public func startRecording() {
+        cancelStreamingPrewarm()
+
         // Fail-safe: reset any stuck state from previous errors
         let traceToken = beginEditTrace(reason: hasText ? "voice-edit-recording" : "new-dictation-recording")
         textAtRecordingStart = hasText ? text : nil
@@ -223,7 +331,7 @@ public class EditViewModel: ObservableObject {
                 if params.apiFormat == .glmRealtime || params.apiFormat == .alibabaRealtime || params.apiFormat == .tencentRealtime {
                     // Use streaming for WebSocket-based providers
                     Task {
-                        await startStreamingRecording(stt: stt, params: params, token: traceToken)
+                        await startStreamingRecording(params: params, token: traceToken)
                     }
                     return
                 }
@@ -251,22 +359,13 @@ public class EditViewModel: ObservableObject {
     /// Start recording with real-time streaming transcription
     @MainActor
     private func startStreamingRecording(
-        stt: ModelAssignment,
         params: (apiKey: String, endpoint: String, model: String, apiFormat: ApiFormat),
         token: UUID
     ) async {
         guard guardCurrentTrace(token, stage: "streaming.start") else { return }
         trace("streaming.start", token: token, details: "model=\(params.model) format=\(params.apiFormat.rawValue)")
 
-        let language = UserDefaults.standard.string(forKey: "language") ?? "auto"
-        let resolvedLanguage = language == "auto" ? nil : language
-        let sessionKey = StreamingSessionKey(
-            apiKey: params.apiKey,
-            endpoint: params.endpoint,
-            model: params.model,
-            apiFormat: params.apiFormat,
-            language: resolvedLanguage
-        )
+        let sessionKey = makeStreamingSessionKey(params: params)
 
         if let existingSession = streamingSession,
            streamingSessionKey == sessionKey,
@@ -278,14 +377,7 @@ public class EditViewModel: ObservableObject {
                 await cleanupStreaming()
             }
 
-            let service = TranscriptionService(
-                apiKey: params.apiKey,
-                endpoint: params.endpoint,
-                model: params.model,
-                language: resolvedLanguage,
-                apiFormat: params.apiFormat
-            )
-            streamingSession = service.createStreamingSession()
+            streamingSession = makeStreamingSession(params: params, key: sessionKey)
             streamingSessionKey = sessionKey
             trace("streaming.session.created", token: token, category: .stt, details: "model=\(params.model)")
         }
@@ -314,7 +406,7 @@ public class EditViewModel: ObservableObject {
             // STEP 3: Start recording before connecting to avoid losing speech during
             // WebSocket setup. Audio chunks are queued by StreamingTranscriptionSession.
             trace("streaming.audio.start.begin", token: token, category: .audio)
-            try recordingController.startStreaming()
+            try recordingController.startStreaming(saveToFile: true)
             guard guardCurrentTrace(token, stage: "streaming.audio.started") else {
                 await cleanupStreaming(stopAudio: true)
                 return
@@ -371,11 +463,22 @@ public class EditViewModel: ObservableObject {
         streamingTask = Task { [weak self] in
             guard let self = self, let session = self.streamingSession else { return }
             self.trace("streaming.results.listen", token: token, category: .stt)
+            var handledTerminalResult = false
 
             defer {
                 // Ensure cleanup if stream ends unexpectedly
-                Task { [weak self] in
+                Task { [weak self, handledTerminalResult] in
+                    guard !handledTerminalResult else { return }
                     guard let self else { return }
+                    guard self.isCurrentTrace(token) else { return }
+                    let shouldStopAudio: Bool
+                    if case .recording = self.editState {
+                        shouldStopAudio = true
+                        self.editState = .idle
+                        self.textAtRecordingStart = nil
+                    } else {
+                        shouldStopAudio = false
+                    }
                     // If still in transcribing state, force reset
                     if self.editState == .transcribing {
                         Logger.warning("Stream ended without final result, forcing state reset", category: .stt)
@@ -383,12 +486,13 @@ public class EditViewModel: ObservableObject {
                             self.editState = .idle
                         }
                     }
-                    await self.cleanupStreaming()
+                    await self.cleanupStreaming(stopAudio: shouldStopAudio)
                 }
             }
 
             for await result in session.receiveResults() {
                 guard !Task.isCancelled else { break }
+                guard self.guardCurrentTrace(token, stage: "streaming.result") else { return }
 
                 switch result {
                 case .partial(let text):
@@ -407,6 +511,7 @@ public class EditViewModel: ObservableObject {
                     }
 
                 case .final(let text):
+                    handledTerminalResult = true
                     self.trace("streaming.final", token: token, category: .stt, details: "chars=\(text.count)")
                     self.trace("streaming.session.keepAlive", token: token, category: .stt)
                     let shouldEdit = await MainActor.run { () -> Bool in
@@ -442,6 +547,7 @@ public class EditViewModel: ObservableObject {
                     return
 
                 case .error(.noSpeechDetected):
+                    handledTerminalResult = true
                     self.trace("streaming.noSpeech", token: token, category: .stt)
                     self.trace("streaming.session.keepAlive", token: token, category: .stt)
                     await MainActor.run {
@@ -454,14 +560,22 @@ public class EditViewModel: ObservableObject {
                     return
 
                 case .error(let error):
+                    handledTerminalResult = true
                     self.trace("streaming.error", token: token, category: .stt, details: "error=\(error.localizedDescription)")
-                    await MainActor.run {
-                        guard self.guardCurrentTrace(token, stage: "streaming.error.ui") else { return }
+                    let shouldStopAudio = await MainActor.run { () -> Bool in
+                        guard self.guardCurrentTrace(token, stage: "streaming.error.ui") else { return false }
+                        let wasRecording: Bool
+                        if case .recording = self.editState {
+                            wasRecording = true
+                        } else {
+                            wasRecording = false
+                        }
                         self.errorMessage = error.localizedDescription
                         self.editState = .idle
                         self.textAtRecordingStart = nil
+                        return wasRecording
                     }
-                    await self.cleanupStreaming()
+                    await self.cleanupStreaming(stopAudio: shouldStopAudio)
                     return
                 }
             }
@@ -475,7 +589,9 @@ public class EditViewModel: ObservableObject {
         streamingTask?.cancel()
         streamingTask = nil
         if stopAudio {
-            _ = recordingController.stop()
+            if let audioURL = recordingController.stop() {
+                RecordingController.deleteRecording(at: audioURL)
+            }
             recordingController.clearStreamingState()
         }
         recordingController.setStreamingHandler(nil)
@@ -536,9 +652,14 @@ public class EditViewModel: ObservableObject {
         guard guardCurrentTrace(token, stage: "streaming.finish") else { return }
         trace("streaming.finish.begin", token: token)
 
-        // Stop recording first - this waits for audio engine to finish processing
-        _ = recordingController.stop() // Stop file recording (we don't use the file)
+        // Stop recording first - this waits for audio engine to finish processing.
+        let audioURL = recordingController.stop()
         trace("streaming.audio.stopped", token: token, category: .audio)
+        if let audioURL {
+            currentAudioURL = audioURL
+            let audioBytes = ((try? FileManager.default.attributesOfItem(atPath: audioURL.path)[.size]) as? Int) ?? 0
+            trace("streaming.localWav.ready", token: token, category: .audio, details: "audioBytes=\(audioBytes) path=\(audioURL.path)")
+        }
 
         editState = editStateAfterRecordingStops(hasExistingText: textAtRecordingStart != nil)
         trace("ui.state.transcribing", token: token, category: .ui, details: "willEdit=\(textAtRecordingStart != nil) textChars=\(text.count)")
