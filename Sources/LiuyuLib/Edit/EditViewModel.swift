@@ -28,14 +28,6 @@ struct StreamingRESTFallbackParams {
     let language: String?
 }
 
-private struct StreamingSessionKey: Equatable {
-    let apiKey: String
-    let endpoint: String
-    let model: String
-    let apiFormat: ApiFormat
-    let language: String?
-}
-
 func editStateAfterRecordingStops(hasExistingText: Bool) -> EditState {
     .transcribing
 }
@@ -226,8 +218,8 @@ public class EditViewModel: ObservableObject {
     private var editTraceLastTime: Date?
 
     // Streaming transcription support
-    private var streamingSession: StreamingTranscriptionSession?
-    private var streamingSessionKey: StreamingSessionKey?
+    private let streamingSessionPool = StreamingSessionPool()
+    private var streamingModeActive = false
     private var streamingTask: Task<Void, Never>?
     private var streamingPrewarmTask: Task<Void, Never>?
     private var streamingRESTFallbackTask: Task<Void, Never>?
@@ -445,9 +437,7 @@ public class EditViewModel: ObservableObject {
         }
 
         let key = makeStreamingSessionKey(params: params)
-        if let existingSession = streamingSession,
-           streamingSessionKey == key,
-           await existingSession.connected {
+        if await streamingSessionPool.isConnected(for: key) {
             Logger.info("[StreamingPrewarm] already connected reason=\(reason) model=\(params.model)", category: .stt)
             return
         }
@@ -463,26 +453,15 @@ public class EditViewModel: ObservableObject {
                 return
             }
 
-            if let existingSession = streamingSession {
-                if streamingSessionKey == key, await existingSession.connected {
-                    await session.disconnect()
-                    Logger.info("[StreamingPrewarm] already connected reason=\(reason) model=\(params.model)", category: .stt)
-                    return
-                }
-
-                guard streamingSessionKey == key else {
-                    await session.disconnect()
-                    Logger.info("[StreamingPrewarm] discarded reason=\(reason) model=\(params.model) existingSession=true", category: .stt)
-                    return
-                }
-
-                await existingSession.disconnect()
+            let installState = await streamingSessionPool.installPrewarmedSession(session, for: key)
+            guard installState == .installed || installState == .replaced else {
+                await session.disconnect()
+                let detail = installState == .alreadyConnected ? "already connected" : "existing session has different key"
+                Logger.info("[StreamingPrewarm] discarded reason=\(reason) model=\(params.model) detail=\(detail)", category: .stt)
+                return
             }
-
-            streamingSession = session
-            streamingSessionKey = key
             Logger.info(
-                "[StreamingPrewarm] connect.done reason=\(reason) model=\(params.model) duration=\(formatSeconds(Date().timeIntervalSince(start)))",
+                "[StreamingPrewarm] connect.done reason=\(reason) model=\(params.model) state=\(installState) duration=\(formatSeconds(Date().timeIntervalSince(start)))",
                 category: .stt
             )
         } catch {
@@ -504,18 +483,17 @@ public class EditViewModel: ObservableObject {
     }
 
     private func startStreamingRESTFallbackIfAvailable(audioURL: URL, token: UUID) {
-        guard let sessionKey = streamingSessionKey,
-              let fallback = streamingRESTFallbackParams(
-                apiKey: sessionKey.apiKey,
-                apiFormat: sessionKey.apiFormat,
-                language: sessionKey.language
-              ) else {
-            return
-        }
-
         streamingRESTFallbackTask?.cancel()
         streamingRESTFallbackTask = Task { [weak self] in
             guard let self else { return }
+            guard let sessionKey = await self.streamingSessionPool.key(),
+                  let fallback = streamingRESTFallbackParams(
+                    apiKey: sessionKey.apiKey,
+                    apiFormat: sessionKey.apiFormat,
+                    language: sessionKey.language
+                  ) else {
+                return
+            }
             await MainActor.run {
                 self.trace(
                     "streaming.restFallback.begin",
@@ -706,35 +684,33 @@ public class EditViewModel: ObservableObject {
         trace("streaming.start", token: token, details: "model=\(params.model) format=\(params.apiFormat.rawValue)")
 
         let sessionKey = makeStreamingSessionKey(params: params)
-
-        if let existingSession = streamingSession,
-           streamingSessionKey == sessionKey,
-           await existingSession.connected {
+        let candidateSession = makeStreamingSession(params: params, key: sessionKey)
+        let lease = await streamingSessionPool.acquireSession(for: sessionKey) {
+            candidateSession
+        }
+        streamingModeActive = true
+        let session = lease.session
+        switch lease.state {
+        case .reused:
             trace("streaming.session.reuse", token: token, category: .stt, details: "model=\(params.model)")
-        } else {
-            if streamingSession != nil {
-                trace("streaming.session.replace", token: token, category: .stt, details: "model=\(params.model)")
-                await cleanupStreaming()
-            }
-
-            streamingSession = makeStreamingSession(params: params, key: sessionKey)
-            streamingSessionKey = sessionKey
+        case .created:
             trace("streaming.session.created", token: token, category: .stt, details: "model=\(params.model)")
+        case .replaced:
+            trace("streaming.session.replace", token: token, category: .stt, details: "model=\(params.model)")
         }
 
         do {
             let connectBeforeRecording = shouldConnectBeforeRecordingStart(params.apiFormat)
             func connectStreamingSession() async throws -> Bool {
-                let wasConnected = await streamingSession?.connected == true
+                let wasConnected = await session.connected
                 trace(wasConnected ? "streaming.connect.reuse" : "streaming.connect.begin", token: token, category: .stt)
-                try await streamingSession?.connect()
+                try await session.connect()
                 guard guardCurrentTrace(token, stage: "streaming.connected") else {
                     return false
                 }
                 trace(wasConnected ? "streaming.connected.reused" : "streaming.connected", token: token, category: .stt)
-                if let diagnostics = await streamingSession?.diagnostics() {
-                    trace("streaming.queue.afterConnected", token: token, category: .stt, details: diagnostics.traceDetails)
-                }
+                let diagnostics = await session.diagnostics()
+                trace("streaming.queue.afterConnected", token: token, category: .stt, details: diagnostics.traceDetails)
                 return true
             }
 
@@ -759,10 +735,10 @@ public class EditViewModel: ObservableObject {
             // STEP 1: Register the handler before formal recording starts. Any
             // pre-roll collected during warm-up is flushed through this handler
             // when startStreaming(saveToFile:) begins.
-            recordingController.setStreamingHandler { [weak self] chunk in
-                Task { [weak self] in
+            recordingController.setStreamingHandler { chunk in
+                Task { [session] in
                     do {
-                        try await self?.streamingSession?.sendAudioChunk(chunk, isFinal: false)
+                        try await session.sendAudioChunk(chunk, isFinal: false)
                     } catch {
                         Logger.error("Failed to send audio chunk: \(error)", category: .stt)
                     }
@@ -849,7 +825,8 @@ public class EditViewModel: ObservableObject {
     private func startStreamingResultsListener(token: UUID) {
         streamingTask?.cancel()
         streamingTask = Task { [weak self] in
-            guard let self = self, let session = self.streamingSession else { return }
+            guard let self else { return }
+            guard let session = await self.streamingSessionPool.current() else { return }
             self.trace("streaming.results.listen", token: token, category: .stt)
             var handledTerminalResult = false
 
@@ -995,16 +972,10 @@ public class EditViewModel: ObservableObject {
             recordingController.clearStreamingState()
         }
         recordingController.setStreamingHandler(nil)
-        if keepSessionAlive,
-           streamingSessionKey?.apiFormat == .glmRealtime,
-           await streamingSession?.connected == true {
-            return
-        }
-
-        let sessionToDisconnect = streamingSession
-        streamingSession = nil
-        streamingSessionKey = nil
-        await sessionToDisconnect?.disconnect()
+        streamingModeActive = false
+        await streamingSessionPool.disconnectCurrent(
+            keepingAliveFor: keepSessionAlive ? .glmRealtime : nil
+        )
     }
 
     public func stopRecording() {
@@ -1028,8 +999,8 @@ public class EditViewModel: ObservableObject {
         stopSilenceDetection()
 
         // Check if we're in streaming mode
-        trace("recording.stop.mode", token: traceToken, details: "streaming=\(streamingSession != nil)")
-        if streamingSession != nil {
+        trace("recording.stop.mode", token: traceToken, details: "streaming=\(streamingModeActive)")
+        if streamingModeActive {
             Task {
                 await finishStreamingRecording(token: traceToken)
             }
@@ -1112,17 +1083,19 @@ public class EditViewModel: ObservableObject {
         // Send any flushed data BEFORE sending finish-task
         // This ensures proper ordering: audio data first, then finish signal
         do {
-            if let diagnostics = await streamingSession?.diagnostics() {
+            if let diagnostics = await streamingSessionPool.diagnostics() {
                 trace("streaming.queue.beforeFlushSend", token: token, category: .stt, details: diagnostics.traceDetails)
             }
 
             if let data = flushedData, !data.isEmpty {
                 trace("streaming.flush.send.begin", token: token, category: .stt, details: "bytes=\(data.count)")
-                try await streamingSession?.sendAudioChunk(data, isFinal: false)
+                if let session = await streamingSessionPool.current() {
+                    try await session.sendAudioChunk(data, isFinal: false)
+                }
                 guard streamingRESTFallbackWinningToken != token else { return }
                 guard guardCurrentTrace(token, stage: "streaming.flush.send.done") else { return }
                 trace("streaming.flush.send.done", token: token, category: .stt)
-                if let diagnostics = await streamingSession?.diagnostics() {
+                if let diagnostics = await streamingSessionPool.diagnostics() {
                     trace("streaming.queue.afterFlushSend", token: token, category: .stt, details: diagnostics.traceDetails)
                 }
             }
@@ -1130,15 +1103,17 @@ public class EditViewModel: ObservableObject {
             // Now send final chunk to indicate end of stream
             guard streamingRESTFallbackWinningToken != token else { return }
             guard guardCurrentTrace(token, stage: "streaming.beforeFinalSend") else { return }
-            if let diagnostics = await streamingSession?.diagnostics() {
+            if let diagnostics = await streamingSessionPool.diagnostics() {
                 trace("streaming.queue.beforeFinalSend", token: token, category: .stt, details: diagnostics.traceDetails)
             }
             trace("streaming.final.send.begin", token: token, category: .stt)
-            try await streamingSession?.sendAudioChunk(Data(), isFinal: true)
+            if let session = await streamingSessionPool.current() {
+                try await session.sendAudioChunk(Data(), isFinal: true)
+            }
             guard streamingRESTFallbackWinningToken != token else { return }
             guard guardCurrentTrace(token, stage: "streaming.final.send.done") else { return }
             trace("streaming.final.send.done", token: token, category: .stt)
-            if let diagnostics = await streamingSession?.diagnostics() {
+            if let diagnostics = await streamingSessionPool.diagnostics() {
                 trace("streaming.queue.afterFinalSend", token: token, category: .stt, details: diagnostics.traceDetails)
             }
         } catch {
