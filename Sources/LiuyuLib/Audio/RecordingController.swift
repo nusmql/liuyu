@@ -285,6 +285,12 @@ public class RecordingController: ObservableObject {
         }
     }
 
+    /// Configure how much PCM data is batched into each WebSocket audio message.
+    /// The input is 16kHz 16-bit mono PCM, so 32,000 bytes is roughly 1 second.
+    public func setStreamingChunkSizeBytes(_ bytes: Int) {
+        audioState.setStreamingChunkSizeBytes(bytes)
+    }
+
     /// Flush any remaining accumulated audio data (call when stopping recording)
     /// Returns the accumulated data that needs to be sent, or nil if nothing to send
     public func flushStreamingData() -> Data? {
@@ -533,10 +539,8 @@ fileprivate final class AudioState: @unchecked Sendable {
     // input device, so frame count is the stable unit here.
     private let maxPreRollFrames = 16_000
 
-    // Stream chunk size: ~300ms of 16kHz 16-bit mono = 9600 bytes.
-    // In practice this keeps WebSocket message overhead low for providers that
-    // only emit final transcription after commit.
-    private let streamChunkSize = 9600
+    // Default stream chunk size: ~300ms of 16kHz 16-bit mono = 9600 bytes.
+    private var streamChunkSize = 9_600
 
     var isRecording: Bool {
         lock.lock()
@@ -562,6 +566,13 @@ fileprivate final class AudioState: @unchecked Sendable {
         }
 
         lock.unlock()
+    }
+
+    func setStreamingChunkSizeBytes(_ bytes: Int) {
+        lock.lock()
+        streamChunkSize = max(3_200, bytes)
+        lock.unlock()
+        Logger.info("🎬 [STREAM-CHUNK] chunkSizeBytes=\(max(3_200, bytes))", category: .audio)
     }
 
     /// Called from audio thread on each tap callback.

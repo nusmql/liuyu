@@ -263,6 +263,10 @@ public class EditViewModel: ObservableObject {
         streamingSession = service.createStreamingSession()
 
         do {
+            let chunkSize = streamingChunkSizeBytes(for: params.apiFormat)
+            recordingController.setStreamingChunkSizeBytes(chunkSize)
+            trace("streaming.chunk.config", token: token, category: .audio, details: "bytes=\(chunkSize)")
+
             // STEP 1: Register the handler before capture starts. The session buffers
             // chunks until the WebSocket connection is ready.
             recordingController.setStreamingHandler { [weak self] chunk in
@@ -310,6 +314,17 @@ public class EditViewModel: ObservableObject {
             stopSilenceDetection()
             await cleanupStreaming(stopAudio: true)
             finishTrace("streaming.start.failed", token: token, details: "error=\(error.localizedDescription)")
+        }
+    }
+
+    private func streamingChunkSizeBytes(for apiFormat: ApiFormat) -> Int {
+        switch apiFormat {
+        case .glmRealtime:
+            // GLM Realtime currently returns final transcription after commit; larger
+            // chunks reduce JSON/base64 WebSocket message overhead and stop-time backlog.
+            return 32_000
+        default:
+            return 9_600
         }
     }
 
