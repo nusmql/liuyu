@@ -113,6 +113,15 @@ func shouldPrewarmStreamingSession(_ apiFormat: ApiFormat) -> Bool {
     }
 }
 
+func shouldRestartAudioBeforeStreamingStart(_ apiFormat: ApiFormat) -> Bool {
+    switch apiFormat {
+    case .glmRealtime, .alibabaRealtime, .tencentRealtime, .iflytekIAT:
+        return true
+    case .whisperMultipart, .glmMultipartEventStream, .chatCompletionsAudio:
+        return false
+    }
+}
+
 func shouldQueueStreamingStartupStop(editState: EditState, hasStreamingStartup: Bool) -> Bool {
     switch editState {
     case .idle, .connecting:
@@ -733,9 +742,11 @@ public class EditViewModel: ObservableObject {
             recordingController.setStreamingChunkSizeBytes(chunkSize)
             trace("streaming.chunk.config", token: token, category: .audio, details: "bytes=\(chunkSize)")
 
-            if connectBeforeRecording {
-                // Keep the engine warm while connecting so speech that starts
-                // immediately after the user clicks is retained in pre-roll.
+            if shouldRestartAudioBeforeStreamingStart(params.apiFormat) {
+                // Rebuild the tap for a real session. GLM-style providers use
+                // the fresh engine as pre-roll while connecting; iFLYTEK starts
+                // recording before connecting, but still needs a fresh tap
+                // because a stale launch-time warmup can produce no buffers.
                 trace("streaming.audio.prewarm.begin", token: token, category: .audio)
                 try recordingController.restartWarmUp()
                 trace("streaming.audio.prewarm.ready", token: token, category: .audio)
@@ -821,9 +832,10 @@ public class EditViewModel: ObservableObject {
             // while keeping end-of-recording backlog bounded.
             return 9_600
         case .iflytekIAT:
-            // iFLYTEK recommends 40ms PCM chunks, which is 1280 bytes at
-            // 16kHz, 16-bit, mono.
-            return 1_280
+            // iFLYTEK demos use 40ms/1280B frames, but connecting while the
+            // user is already recording creates a backlog of tiny messages.
+            // Use 100ms frames to reduce queue drain time while staying small.
+            return 3_200
         default:
             return 9_600
         }
