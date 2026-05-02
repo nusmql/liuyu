@@ -116,11 +116,22 @@ final class EditPipelineStateTests: XCTestCase {
         XCTAssertFalse(isWebSocketStreamingFormat(.chatCompletionsAudio))
     }
 
-    func testIFlytekConnectsBeforeAudioCaptureToAvoidPermanentBacklog() {
+    func testStreamingProvidersConnectBeforeAudioCaptureToAvoidStartupBacklog() {
+        XCTAssertTrue(shouldConnectBeforeAudioCapture(.glmRealtime))
+        XCTAssertTrue(shouldConnectBeforeAudioCapture(.alibabaRealtime))
+        XCTAssertTrue(shouldConnectBeforeAudioCapture(.tencentRealtime))
         XCTAssertTrue(shouldConnectBeforeAudioCapture(.iflytekIAT))
-        XCTAssertFalse(shouldConnectBeforeAudioCapture(.glmRealtime))
-        XCTAssertFalse(shouldConnectBeforeAudioCapture(.alibabaRealtime))
-        XCTAssertFalse(shouldConnectBeforeAudioCapture(.tencentRealtime))
+        XCTAssertFalse(shouldConnectBeforeAudioCapture(.whisperMultipart))
+        XCTAssertFalse(shouldConnectBeforeAudioCapture(.glmMultipartEventStream))
+        XCTAssertFalse(shouldConnectBeforeAudioCapture(.chatCompletionsAudio))
+    }
+
+    func testStopDuringStreamingStartupIsQueuedOnlyWhileIdle() {
+        XCTAssertTrue(shouldQueueStreamingStartupStop(editState: .idle, hasStreamingStartup: true))
+        XCTAssertFalse(shouldQueueStreamingStartupStop(editState: .idle, hasStreamingStartup: false))
+        XCTAssertFalse(shouldQueueStreamingStartupStop(editState: .recording(audioLevel: 0), hasStreamingStartup: true))
+        XCTAssertFalse(shouldQueueStreamingStartupStop(editState: .transcribing, hasStreamingStartup: true))
+        XCTAssertFalse(shouldQueueStreamingStartupStop(editState: .editing, hasStreamingStartup: true))
     }
 }
 

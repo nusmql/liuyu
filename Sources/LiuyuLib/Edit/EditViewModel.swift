@@ -94,7 +94,11 @@ func isWebSocketStreamingFormat(_ apiFormat: ApiFormat) -> Bool {
 }
 
 func shouldConnectBeforeAudioCapture(_ apiFormat: ApiFormat) -> Bool {
-    apiFormat == .iflytekIAT
+    isWebSocketStreamingFormat(apiFormat)
+}
+
+func shouldQueueStreamingStartupStop(editState: EditState, hasStreamingStartup: Bool) -> Bool {
+    editState == .idle && hasStreamingStartup
 }
 
 func pcm16DataFromWAV(_ wavData: Data) -> Data? {
@@ -193,6 +197,8 @@ public class EditViewModel: ObservableObject {
     private var streamingPrewarmTask: Task<Void, Never>?
     private var streamingRESTFallbackTask: Task<Void, Never>?
     private var streamingRESTFallbackWinningToken: UUID?
+    private var streamingStartupToken: UUID?
+    private var pendingStreamingStopToken: UUID?
 
     // Silence timeout
     private var silenceCheckTimer: Timer?
@@ -363,6 +369,22 @@ public class EditViewModel: ObservableObject {
             apiFormat: params.apiFormat
         )
         return service.createStreamingSession()
+    }
+
+    private func consumePendingStreamingStop(token: UUID, stage: String) -> Bool {
+        guard pendingStreamingStopToken == token else { return false }
+        pendingStreamingStopToken = nil
+        trace(stage, token: token, details: "reason=pending-stop")
+        return true
+    }
+
+    private func cancelStreamingStartupBeforeAudio(token: UUID) async {
+        editState = .idle
+        textAtRecordingStart = nil
+        stopSilenceDetection()
+        recordingController.clearStreamingState()
+        finishTrace("streaming.done.cancelledBeforeAudio", token: token, details: "textChars=\(text.count)")
+        await cleanupStreaming(stopAudio: true)
     }
 
     private func cancelStreamingPrewarm() {
@@ -581,6 +603,8 @@ public class EditViewModel: ObservableObject {
         streamingRESTFallbackTask?.cancel()
         streamingRESTFallbackTask = nil
         streamingRESTFallbackWinningToken = nil
+        streamingStartupToken = nil
+        pendingStreamingStopToken = nil
 
         // Fail-safe: reset any stuck state from previous errors
         let traceToken = beginEditTrace(reason: hasText ? "voice-edit-recording" : "new-dictation-recording")
@@ -603,6 +627,7 @@ public class EditViewModel: ObservableObject {
                 trace("stt.resolved", token: traceToken, details: "model=\(params.model) format=\(params.apiFormat.rawValue)")
                 if isWebSocketStreamingFormat(params.apiFormat) {
                     // Use streaming for WebSocket-based providers
+                    streamingStartupToken = traceToken
                     Task {
                         await startStreamingRecording(params: params, token: traceToken)
                     }
@@ -636,6 +661,12 @@ public class EditViewModel: ObservableObject {
         token: UUID
     ) async {
         guard guardCurrentTrace(token, stage: "streaming.start") else { return }
+        streamingStartupToken = token
+        defer {
+            if streamingStartupToken == token {
+                streamingStartupToken = nil
+            }
+        }
         trace("streaming.start", token: token, details: "model=\(params.model) format=\(params.apiFormat.rawValue)")
 
         let sessionKey = makeStreamingSessionKey(params: params)
@@ -692,14 +723,19 @@ public class EditViewModel: ObservableObject {
             startStreamingResultsListener(token: token)
 
             if connectBeforeAudio {
-                // iFLYTEK requires paced 40ms audio frames. If we buffer during
-                // connect, the backlog cannot catch up, so connect first.
+                // Connect before opening the microphone. This avoids provider
+                // backlog during slow WebSocket handshakes and keeps paced
+                // protocols from replaying audio after the user releases.
                 guard try await connectStreamingSession() else { return }
+                if consumePendingStreamingStop(token: token, stage: "streaming.stop.beforeAudioStart") {
+                    await cancelStreamingStartupBeforeAudio(token: token)
+                    return
+                }
             }
 
-            // STEP 3: Most providers record before connecting to avoid losing
-            // early speech. iFLYTEK connects first because its paced protocol
-            // cannot replay connect-time backlog faster than real time.
+            // STEP 3: Open the microphone only after the provider is ready.
+            // This avoids sending startup backlog after the user has already
+            // released the hotkey or button.
             trace("streaming.audio.start.begin", token: token, category: .audio)
             try recordingController.startStreaming(saveToFile: true)
             guard guardCurrentTrace(token, stage: "streaming.audio.started") else {
@@ -709,6 +745,10 @@ public class EditViewModel: ObservableObject {
             recordingStartTime = Date()
             editState = .recording(audioLevel: 0)
             startSilenceDetection()
+            if consumePendingStreamingStop(token: token, stage: "streaming.stop.afterAudioStart") {
+                await finishStreamingRecording(token: token)
+                return
+            }
 
             if !connectBeforeAudio {
                 // STEP 4: Connect to WebSocket while recording is ongoing.
@@ -883,6 +923,7 @@ public class EditViewModel: ObservableObject {
         keepSessionAlive: Bool = false,
         cancelRESTFallback: Bool = true
     ) async {
+        pendingStreamingStopToken = nil
         streamingTask?.cancel()
         streamingTask = nil
         if cancelRESTFallback {
@@ -916,10 +957,17 @@ public class EditViewModel: ObservableObject {
         recordingFailed = false
 
         guard case .recording = editState else {
+            let hasStreamingStartup = streamingStartupToken == traceToken
+            if shouldQueueStreamingStartupStop(editState: editState, hasStreamingStartup: hasStreamingStartup) {
+                pendingStreamingStopToken = traceToken
+                trace("recording.stop.queued", token: traceToken, details: "state=\(editState)")
+                return
+            }
             trace("recording.stop.ignored", token: traceToken, details: "state=\(editState)")
             return
         }
 
+        pendingStreamingStopToken = nil
         stopSilenceDetection()
 
         // Check if we're in streaming mode
@@ -1273,6 +1321,8 @@ public class EditViewModel: ObservableObject {
         text = ""
         errorMessage = nil
         editState = .idle
+        streamingStartupToken = nil
+        pendingStreamingStopToken = nil
         stopSilenceDetection()
         cleanupAudio()
         Task {
