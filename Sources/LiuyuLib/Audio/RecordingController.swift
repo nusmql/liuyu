@@ -237,9 +237,11 @@ public class RecordingController: ObservableObject {
     public func stop() -> URL? {
         // stopRecording() internally waits for audio engine to settle
         audioState.stopRecording()
+        let url = tempFileURL
+        tempFileURL = nil
 
         // Log file size for debugging
-        if let url = tempFileURL,
+        if let url,
            let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
            let size = attrs[.size] as? Int {
             Logger.debug("WAV file: \(size) bytes at \(url.lastPathComponent)", category: .audio)
@@ -255,7 +257,7 @@ public class RecordingController: ObservableObject {
             try? warmUp()
         }
 
-        return tempFileURL
+        return url
     }
 
     /// Clean up orphaned temp files from previous sessions.
@@ -309,32 +311,6 @@ public class RecordingController: ObservableObject {
     fileprivate nonisolated func processBuffer(_ buffer: AVAudioPCMBuffer,
                                                converter: AVAudioConverter?,
                                                audioState: AudioState) {
-        // Calculate RMS audio level
-        guard let channelData = buffer.floatChannelData?[0] else { return }
-        let frameCount = Int(buffer.frameLength)
-
-        var rms: Float = 0
-        for i in 0..<frameCount {
-            rms += channelData[i] * channelData[i]
-        }
-        rms = sqrt(rms / Float(max(frameCount, 1)))
-
-        // Normalize to 0...1 (typical speech RMS is -40dB to -10dB)
-        let db = 20 * log10(max(rms, 1e-6))
-        let normalized = max(0, min(1, (db + 50) / 50))
-
-        // Only publish audio level while recording (avoids phantom UI updates)
-        if audioState.isRecording {
-            Task { @MainActor [weak self] in
-                self?.audioLevel = normalized
-                // Track audio activity for smart timeout
-                if normalized > (self?.speechThreshold ?? 0.25) {
-                    self?.lastAudioActivityTime = Date()
-                    Logger.debug("Activity detected: \(String(format: "%.2f", normalized))", category: .audio)
-                }
-            }
-        }
-
         // Convert to 16kHz mono PCM
         guard let converter else {
             Logger.debug("🎬 [PROCESS] No converter, skipping", category: .audio)
@@ -366,6 +342,20 @@ public class RecordingController: ObservableObject {
         }
 
         if error == nil && convertedBuffer.frameLength > 0 {
+            let normalized = normalizedPCM16BufferAudioLevel(convertedBuffer)
+
+            // Only publish audio level while recording (avoids phantom UI updates)
+            if audioState.isRecording {
+                Task { @MainActor [weak self] in
+                    self?.audioLevel = normalized
+                    // Track audio activity for smart timeout
+                    if normalized > (self?.speechThreshold ?? 0.25) {
+                        self?.lastAudioActivityTime = Date()
+                        Logger.debug("Activity detected: \(String(format: "%.2f", normalized))", category: .audio)
+                    }
+                }
+            }
+
             // AudioState routes the buffer to pre-roll ring buffer or audio file
             audioState.handleBuffer(convertedBuffer)
         }
@@ -530,6 +520,30 @@ func streamingChunkSplit(
     }
 
     return (chunks, remainder)
+}
+
+func normalizedPCM16BufferAudioLevel(_ buffer: AVAudioPCMBuffer) -> Float {
+    guard buffer.frameLength > 0, let channelData = buffer.int16ChannelData else {
+        return 0
+    }
+
+    let channelCount = max(1, Int(buffer.format.channelCount))
+    let frameCount = Int(buffer.frameLength)
+    var rms: Float = 0
+    var sampleCount = 0
+
+    for channel in 0..<channelCount {
+        let samples = UnsafeBufferPointer(start: channelData[channel], count: frameCount)
+        for sample in samples {
+            let normalizedSample = Float(sample) / Float(Int16.max)
+            rms += normalizedSample * normalizedSample
+        }
+        sampleCount += frameCount
+    }
+
+    rms = sqrt(rms / Float(max(sampleCount, 1)))
+    let db = 20 * log10(max(rms, 1e-6))
+    return max(0, min(1, (db + 50) / 50))
 }
 
 private extension Data {

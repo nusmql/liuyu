@@ -94,7 +94,7 @@ func isWebSocketStreamingFormat(_ apiFormat: ApiFormat) -> Bool {
     }
 }
 
-func shouldConnectBeforeAudioCapture(_ apiFormat: ApiFormat) -> Bool {
+func shouldConnectBeforeRecordingStart(_ apiFormat: ApiFormat) -> Bool {
     isWebSocketStreamingFormat(apiFormat)
 }
 
@@ -698,7 +698,7 @@ public class EditViewModel: ObservableObject {
         }
 
         do {
-            let connectBeforeAudio = shouldConnectBeforeAudioCapture(params.apiFormat)
+            let connectBeforeRecording = shouldConnectBeforeRecordingStart(params.apiFormat)
             func connectStreamingSession() async throws -> Bool {
                 let wasConnected = await streamingSession?.connected == true
                 trace(wasConnected ? "streaming.connect.reuse" : "streaming.connect.begin", token: token, category: .stt)
@@ -733,8 +733,14 @@ public class EditViewModel: ObservableObject {
             // STEP 2: Start listening for results before connect so server events are not missed.
             startStreamingResultsListener(token: token)
 
-            if connectBeforeAudio {
-                // Connect before opening the microphone. This avoids provider
+            if connectBeforeRecording {
+                // Keep the engine warm while connecting so speech that starts
+                // immediately after the user clicks is retained in pre-roll.
+                trace("streaming.audio.prewarm.begin", token: token, category: .audio)
+                try recordingController.warmUp()
+                trace("streaming.audio.prewarm.ready", token: token, category: .audio)
+
+                // Connect before starting formal recording. This avoids provider
                 // backlog during slow WebSocket handshakes and keeps paced
                 // protocols from replaying audio after the user releases.
                 guard try await connectStreamingSession() else { return }
@@ -744,9 +750,9 @@ public class EditViewModel: ObservableObject {
                 }
             }
 
-            // STEP 3: Open the microphone only after the provider is ready.
-            // This avoids sending startup backlog after the user has already
-            // released the hotkey or button.
+            // STEP 3: Start formal recording only after the provider is ready.
+            // The engine may already be warm and holding pre-roll, but file
+            // writing and live streaming start here.
             trace("streaming.audio.start.begin", token: token, category: .audio)
             try recordingController.startStreaming(saveToFile: true)
             guard guardCurrentTrace(token, stage: "streaming.audio.started") else {
@@ -761,7 +767,7 @@ public class EditViewModel: ObservableObject {
                 return
             }
 
-            if !connectBeforeAudio {
+            if !connectBeforeRecording {
                 // STEP 4: Connect to WebSocket while recording is ongoing.
                 guard try await connectStreamingSession() else { return }
             }

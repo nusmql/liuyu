@@ -116,14 +116,14 @@ final class EditPipelineStateTests: XCTestCase {
         XCTAssertFalse(isWebSocketStreamingFormat(.chatCompletionsAudio))
     }
 
-    func testStreamingProvidersConnectBeforeAudioCaptureToAvoidStartupBacklog() {
-        XCTAssertTrue(shouldConnectBeforeAudioCapture(.glmRealtime))
-        XCTAssertTrue(shouldConnectBeforeAudioCapture(.alibabaRealtime))
-        XCTAssertTrue(shouldConnectBeforeAudioCapture(.tencentRealtime))
-        XCTAssertTrue(shouldConnectBeforeAudioCapture(.iflytekIAT))
-        XCTAssertFalse(shouldConnectBeforeAudioCapture(.whisperMultipart))
-        XCTAssertFalse(shouldConnectBeforeAudioCapture(.glmMultipartEventStream))
-        XCTAssertFalse(shouldConnectBeforeAudioCapture(.chatCompletionsAudio))
+    func testStreamingProvidersConnectBeforeRecordingStartToAvoidStartupBacklog() {
+        XCTAssertTrue(shouldConnectBeforeRecordingStart(.glmRealtime))
+        XCTAssertTrue(shouldConnectBeforeRecordingStart(.alibabaRealtime))
+        XCTAssertTrue(shouldConnectBeforeRecordingStart(.tencentRealtime))
+        XCTAssertTrue(shouldConnectBeforeRecordingStart(.iflytekIAT))
+        XCTAssertFalse(shouldConnectBeforeRecordingStart(.whisperMultipart))
+        XCTAssertFalse(shouldConnectBeforeRecordingStart(.glmMultipartEventStream))
+        XCTAssertFalse(shouldConnectBeforeRecordingStart(.chatCompletionsAudio))
     }
 
     func testStopDuringStreamingStartupIsQueuedBeforeRecordingBegins() {

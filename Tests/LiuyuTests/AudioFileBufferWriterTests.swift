@@ -94,6 +94,19 @@ final class AudioFileBufferWriterTests: XCTestCase {
         XCTAssertEqual(readFile.length, 0)
     }
 
+    func testPCM16BufferAudioLevelUsesConvertedBufferSamples() throws {
+        let format = try pcm16MonoFormat()
+
+        XCTAssertEqual(
+            normalizedPCM16BufferAudioLevel(try makeBuffer(format: format, frameLength: 320, sampleValue: 0)),
+            0
+        )
+        XCTAssertGreaterThan(
+            normalizedPCM16BufferAudioLevel(try makeBuffer(format: format, frameLength: 320, sampleValue: 3_276)),
+            0.5
+        )
+    }
+
     private func temporaryWAVURL() -> URL {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("liuyu-writer-test-\(UUID().uuidString).wav")
