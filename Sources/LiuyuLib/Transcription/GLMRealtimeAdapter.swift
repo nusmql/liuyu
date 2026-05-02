@@ -123,6 +123,10 @@ public actor GLMRealtimeAdapter: WebSocketStrategy {
 
     public func sendAudio(_ data: Data, isFinal: Bool) async throws {
         if !data.isEmpty {
+            if didCommitAudio {
+                didCommitAudio = false
+                Logger.info("[GLM Realtime] starting next input audio buffer on reused connection", category: .stt)
+            }
             let message = buildAudioMessage(data, isFinal: false)
             Logger.debug("[GLM Realtime] append audio bytes=\(data.count)", category: .stt)
             let sendStart = Date()
@@ -156,7 +160,9 @@ public actor GLMRealtimeAdapter: WebSocketStrategy {
     }
 
     private func commitAudioBuffer() async throws {
-        guard !didCommitAudio else { return }
+        if didCommitAudio {
+            Logger.info("[GLM Realtime] committing reused input audio buffer", category: .stt)
+        }
         didCommitAudio = true
 
         Logger.info("[GLM Realtime] committing input_audio_buffer", category: .stt)

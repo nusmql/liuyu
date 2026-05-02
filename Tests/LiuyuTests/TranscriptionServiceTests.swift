@@ -313,6 +313,28 @@ final class TranscriptionServiceTests: XCTestCase {
         XCTAssertEqual(drainedDiagnostics.totalSentChunks, 1)
     }
 
+    func testStreamingSessionMarksDisconnectedWhenWebSocketCloses() async throws {
+        let strategy = DisconnectableStreamingStrategy()
+        let session = StreamingTranscriptionSession(
+            strategy: strategy,
+            config: TranscriptionConfig(apiKey: "key", endpoint: "wss://example.test/realtime", model: "test")
+        )
+
+        try await session.connect()
+        let connectedAfterConnect = await session.connected
+        XCTAssertTrue(connectedAfterConnect)
+
+        await strategy.triggerDisconnect()
+
+        var isConnected = await session.connected
+        for _ in 0..<10 where isConnected {
+            try await Task.sleep(for: .milliseconds(5))
+            isConnected = await session.connected
+        }
+
+        XCTAssertFalse(isConnected)
+    }
+
     func testStreamingSessionReportsQueueDiagnostics() async throws {
         let strategy = OrderedStreamingStrategy(sendDelay: .milliseconds(1))
         let session = StreamingTranscriptionSession(
@@ -457,5 +479,52 @@ private actor BlockingStreamingStrategy: TranscriptionStrategy {
     func unblockSend() {
         releaseSendContinuation?.resume()
         releaseSendContinuation = nil
+    }
+}
+
+private actor DisconnectableStreamingStrategy: WebSocketStrategy {
+    let strategyId = "disconnectable-streaming-test"
+    let supportsStreaming = true
+
+    private var disconnectHandler: DisconnectHandler?
+
+    func connect(config: TranscriptionConfig) async throws {}
+
+    func sendAudio(_ data: Data, isFinal: Bool) async throws {}
+
+    nonisolated func receiveResults() -> AsyncStream<TranscriptionResult> {
+        AsyncStream { continuation in
+            continuation.finish()
+        }
+    }
+
+    func disconnect() async {}
+
+    func setDisconnectHandler(_ handler: DisconnectHandler?) async {
+        disconnectHandler = handler
+    }
+
+    nonisolated func buildWebSocketURL(config: TranscriptionConfig) throws -> URL {
+        URL(string: "wss://example.test/realtime")!
+    }
+
+    nonisolated func buildWebSocketHeaders(config: TranscriptionConfig) -> [String: String] {
+        [:]
+    }
+
+    nonisolated func buildSetupMessage(config: TranscriptionConfig) -> [String: Any]? {
+        nil
+    }
+
+    nonisolated func buildAudioMessage(_ data: Data, isFinal: Bool) -> [String: Any] {
+        [:]
+    }
+
+    nonisolated func parseMessage(_ message: String) -> TranscriptionResult? {
+        nil
+    }
+
+    func triggerDisconnect() {
+        disconnectHandler?()
     }
 }

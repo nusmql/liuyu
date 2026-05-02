@@ -81,6 +81,13 @@ public actor StreamingTranscriptionSession {
         do {
             try await strategy.connect(config: config)
             isConnected = true
+            if let webSocketStrategy = strategy as? any WebSocketStrategy {
+                await webSocketStrategy.setDisconnectHandler { [weak self] in
+                    Task {
+                        await self?.handleUnexpectedDisconnect()
+                    }
+                }
+            }
             Task { [weak self] in
                 try? await self?.drainQueuedChunksIfPossible()
             }
@@ -123,6 +130,9 @@ public actor StreamingTranscriptionSession {
     public func disconnect() async {
         isConnected = false
         failQueuedChunks(TranscriptionError.networkError("Streaming session disconnected"))
+        if let webSocketStrategy = strategy as? any WebSocketStrategy {
+            await webSocketStrategy.setDisconnectHandler(nil)
+        }
         await strategy.disconnect()
     }
 
@@ -187,6 +197,11 @@ public actor StreamingTranscriptionSession {
                 category: .stt
             )
         }
+    }
+
+    private func handleUnexpectedDisconnect() {
+        isConnected = false
+        failQueuedChunks(TranscriptionError.networkError("Streaming session disconnected"))
     }
 
     private func shouldLogEnqueue(diagnostics: StreamingQueueDiagnostics, isFinal: Bool) -> Bool {

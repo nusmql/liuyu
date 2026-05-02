@@ -14,6 +14,14 @@ enum StreamingPartialTextUpdate: Equatable {
     case replaceText(String)
 }
 
+private struct StreamingSessionKey: Equatable {
+    let apiKey: String
+    let endpoint: String
+    let model: String
+    let apiFormat: ApiFormat
+    let language: String?
+}
+
 func editStateAfterRecordingStops(hasExistingText: Bool) -> EditState {
     .transcribing
 }
@@ -51,6 +59,7 @@ public class EditViewModel: ObservableObject {
 
     // Streaming transcription support
     private var streamingSession: StreamingTranscriptionSession?
+    private var streamingSessionKey: StreamingSessionKey?
     private var streamingTask: Task<Void, Never>?
 
     // Silence timeout
@@ -249,18 +258,37 @@ public class EditViewModel: ObservableObject {
         guard guardCurrentTrace(token, stage: "streaming.start") else { return }
         trace("streaming.start", token: token, details: "model=\(params.model) format=\(params.apiFormat.rawValue)")
 
-        // Create transcription service
         let language = UserDefaults.standard.string(forKey: "language") ?? "auto"
-        let service = TranscriptionService(
+        let resolvedLanguage = language == "auto" ? nil : language
+        let sessionKey = StreamingSessionKey(
             apiKey: params.apiKey,
             endpoint: params.endpoint,
             model: params.model,
-            language: language == "auto" ? nil : language,
-            apiFormat: params.apiFormat
+            apiFormat: params.apiFormat,
+            language: resolvedLanguage
         )
 
-        // Create streaming session
-        streamingSession = service.createStreamingSession()
+        if let existingSession = streamingSession,
+           streamingSessionKey == sessionKey,
+           await existingSession.connected {
+            trace("streaming.session.reuse", token: token, category: .stt, details: "model=\(params.model)")
+        } else {
+            if streamingSession != nil {
+                trace("streaming.session.replace", token: token, category: .stt, details: "model=\(params.model)")
+                await cleanupStreaming()
+            }
+
+            let service = TranscriptionService(
+                apiKey: params.apiKey,
+                endpoint: params.endpoint,
+                model: params.model,
+                language: resolvedLanguage,
+                apiFormat: params.apiFormat
+            )
+            streamingSession = service.createStreamingSession()
+            streamingSessionKey = sessionKey
+            trace("streaming.session.created", token: token, category: .stt, details: "model=\(params.model)")
+        }
 
         do {
             let chunkSize = streamingChunkSizeBytes(for: params.apiFormat)
@@ -297,13 +325,14 @@ public class EditViewModel: ObservableObject {
             startSilenceDetection()
 
             // STEP 4: Connect to WebSocket while recording is ongoing.
-            trace("streaming.connect.begin", token: token, category: .stt)
+            let wasConnected = await streamingSession?.connected == true
+            trace(wasConnected ? "streaming.connect.reuse" : "streaming.connect.begin", token: token, category: .stt)
             try await streamingSession?.connect()
             guard guardCurrentTrace(token, stage: "streaming.connected") else {
                 await cleanupStreaming(stopAudio: true)
                 return
             }
-            trace("streaming.connected", token: token, category: .stt)
+            trace(wasConnected ? "streaming.connected.reused" : "streaming.connected", token: token, category: .stt)
             if let diagnostics = await streamingSession?.diagnostics() {
                 trace("streaming.queue.afterConnected", token: token, category: .stt, details: diagnostics.traceDetails)
             }
@@ -379,6 +408,7 @@ public class EditViewModel: ObservableObject {
 
                 case .final(let text):
                     self.trace("streaming.final", token: token, category: .stt, details: "chars=\(text.count)")
+                    self.trace("streaming.session.keepAlive", token: token, category: .stt)
                     let shouldEdit = await MainActor.run { () -> Bool in
                         guard self.guardCurrentTrace(token, stage: "streaming.final.ui") else { return false }
                         guard !text.isEmpty else {
@@ -408,18 +438,19 @@ public class EditViewModel: ObservableObject {
                             self.finishTrace("streaming.edit.done", token: token, details: "textChars=\(self.text.count)")
                         }
                     }
-                    await self.cleanupStreaming()
+                    await self.cleanupStreaming(keepSessionAlive: true)
                     return
 
                 case .error(.noSpeechDetected):
                     self.trace("streaming.noSpeech", token: token, category: .stt)
+                    self.trace("streaming.session.keepAlive", token: token, category: .stt)
                     await MainActor.run {
                         guard self.guardCurrentTrace(token, stage: "streaming.noSpeech.ui") else { return }
                         self.editState = .idle
                         self.textAtRecordingStart = nil
                         self.finishTrace("streaming.done.noSpeech", token: token, details: "textChars=\(self.text.count)")
                     }
-                    await self.cleanupStreaming()
+                    await self.cleanupStreaming(keepSessionAlive: true)
                     return
 
                 case .error(let error):
@@ -440,7 +471,7 @@ public class EditViewModel: ObservableObject {
     }
 
     /// Cleanup streaming resources
-    private func cleanupStreaming(stopAudio: Bool = false) async {
+    private func cleanupStreaming(stopAudio: Bool = false, keepSessionAlive: Bool = false) async {
         streamingTask?.cancel()
         streamingTask = nil
         if stopAudio {
@@ -448,8 +479,15 @@ public class EditViewModel: ObservableObject {
             recordingController.clearStreamingState()
         }
         recordingController.setStreamingHandler(nil)
+        if keepSessionAlive,
+           streamingSessionKey?.apiFormat == .glmRealtime,
+           await streamingSession?.connected == true {
+            return
+        }
+
         await streamingSession?.disconnect()
         streamingSession = nil
+        streamingSessionKey = nil
     }
 
     public func stopRecording() {
