@@ -32,7 +32,14 @@ public actor StreamingTranscriptionSession {
     private let strategy: TranscriptionStrategy
     private let config: TranscriptionConfig
     private var isConnected = false
-    private var pendingChunks: [(data: Data, isFinal: Bool)] = []
+    private var queuedChunks: [QueuedChunk] = []
+    private var isDrainingQueuedChunks = false
+
+    private struct QueuedChunk {
+        let data: Data
+        let isFinal: Bool
+        let continuation: CheckedContinuation<Void, Error>
+    }
 
     init(strategy: TranscriptionStrategy, config: TranscriptionConfig) {
         self.strategy = strategy
@@ -42,26 +49,13 @@ public actor StreamingTranscriptionSession {
     /// Connect to the transcription service
     public func connect() async throws {
         guard !isConnected else { return }
-        try await strategy.connect(config: config)
-        isConnected = true
-
-        let queuedCount = pendingChunks.count
-        let queuedBytes = pendingChunks.reduce(0) { $0 + $1.data.count }
-        let flushStart = Date()
-        if queuedCount > 0 {
-            Logger.info("[StreamingSession] flushing queued audio chunks=\(queuedCount) bytes=\(queuedBytes)", category: .stt)
-        }
-
-        while !pendingChunks.isEmpty {
-            let chunk = pendingChunks.removeFirst()
-            try await strategy.sendAudio(chunk.data, isFinal: chunk.isFinal)
-        }
-
-        if queuedCount > 0 {
-            Logger.info(
-                "[StreamingSession] queued audio flush done chunks=\(queuedCount) bytes=\(queuedBytes) duration=\(Self.formatSeconds(Date().timeIntervalSince(flushStart)))",
-                category: .stt
-            )
+        do {
+            try await strategy.connect(config: config)
+            isConnected = true
+            try await drainQueuedChunksIfPossible()
+        } catch {
+            failQueuedChunks(error)
+            throw error
         }
     }
 
@@ -70,12 +64,12 @@ public actor StreamingTranscriptionSession {
     ///   - data: Audio chunk (typically ~300ms of 16kHz 16-bit PCM)
     ///   - isFinal: Whether this is the final chunk (end of recording)
     public func sendAudioChunk(_ data: Data, isFinal: Bool) async throws {
-        guard isConnected else {
-            pendingChunks.append((data, isFinal))
-            return
+        try await withCheckedThrowingContinuation { continuation in
+            queuedChunks.append(QueuedChunk(data: data, isFinal: isFinal, continuation: continuation))
+            Task { [weak self] in
+                try? await self?.drainQueuedChunksIfPossible()
+            }
         }
-
-        try await strategy.sendAudio(data, isFinal: isFinal)
     }
 
     /// Receive transcription results as a stream
@@ -88,9 +82,9 @@ public actor StreamingTranscriptionSession {
 
     /// Disconnect and cleanup
     public func disconnect() async {
-        pendingChunks.removeAll()
-        await strategy.disconnect()
         isConnected = false
+        failQueuedChunks(TranscriptionError.networkError("Streaming session disconnected"))
+        await strategy.disconnect()
     }
 
     /// Check if the session is currently connected
@@ -107,6 +101,47 @@ public actor StreamingTranscriptionSession {
 
     nonisolated private static func formatSeconds(_ value: TimeInterval) -> String {
         String(format: "%.3fs", value)
+    }
+
+    private func drainQueuedChunksIfPossible() async throws {
+        guard isConnected, !isDrainingQueuedChunks else { return }
+
+        isDrainingQueuedChunks = true
+        defer { isDrainingQueuedChunks = false }
+
+        let queuedCount = queuedChunks.count
+        let queuedBytes = queuedChunks.reduce(0) { $0 + $1.data.count }
+        let flushStart = Date()
+        if queuedCount > 0 {
+            Logger.info("[StreamingSession] flushing queued audio chunks=\(queuedCount) bytes=\(queuedBytes)", category: .stt)
+        }
+
+        while isConnected, !queuedChunks.isEmpty {
+            let chunk = queuedChunks.removeFirst()
+            do {
+                try await strategy.sendAudio(chunk.data, isFinal: chunk.isFinal)
+                chunk.continuation.resume()
+            } catch {
+                chunk.continuation.resume(throwing: error)
+                failQueuedChunks(error)
+                throw error
+            }
+        }
+
+        if queuedCount > 0 {
+            Logger.info(
+                "[StreamingSession] queued audio flush done chunks=\(queuedCount) bytes=\(queuedBytes) duration=\(Self.formatSeconds(Date().timeIntervalSince(flushStart)))",
+                category: .stt
+            )
+        }
+    }
+
+    private func failQueuedChunks(_ error: Error) {
+        let chunks = queuedChunks
+        queuedChunks.removeAll()
+        for chunk in chunks {
+            chunk.continuation.resume(throwing: error)
+        }
     }
 }
 

@@ -252,6 +252,32 @@ final class TranscriptionServiceTests: XCTestCase {
         }
     }
 
+    func testStreamingSessionSendsFinalAfterQueuedAudioFlushCompletes() async throws {
+        let strategy = OrderedStreamingStrategy(sendDelay: .milliseconds(50))
+        let session = StreamingTranscriptionSession(
+            strategy: strategy,
+            config: TranscriptionConfig(apiKey: "key", endpoint: "wss://example.test/realtime", model: "test")
+        )
+
+        async let firstSend: Void = session.sendAudioChunk(Data([0x01]), isFinal: false)
+        async let secondSend: Void = session.sendAudioChunk(Data([0x02]), isFinal: false)
+
+        try await Task.sleep(for: .milliseconds(10))
+
+        async let connect: Void = session.connect()
+
+        try await Task.sleep(for: .milliseconds(10))
+
+        async let finalSend: Void = session.sendAudioChunk(Data(), isFinal: true)
+
+        _ = try await (firstSend, secondSend, finalSend, connect)
+
+        let events = await strategy.snapshot()
+        XCTAssertEqual(events.first, "connect")
+        XCTAssertEqual(events.last, "send:empty:final")
+        XCTAssertEqual(Set(events.dropFirst().dropLast()), Set(["send:01:audio", "send:02:audio"]))
+    }
+
     private static func requestBodyData(from request: URLRequest) -> Data? {
         if let body = request.httpBody {
             return body
@@ -277,5 +303,39 @@ final class TranscriptionServiceTests: XCTestCase {
             }
         }
         return data
+    }
+}
+
+private actor OrderedStreamingStrategy: TranscriptionStrategy {
+    let strategyId = "ordered-streaming-test"
+    let supportsStreaming = true
+
+    private let sendDelay: Duration
+    private var events: [String] = []
+
+    init(sendDelay: Duration) {
+        self.sendDelay = sendDelay
+    }
+
+    func connect(config: TranscriptionConfig) async throws {
+        events.append("connect")
+    }
+
+    func sendAudio(_ data: Data, isFinal: Bool) async throws {
+        let label = data.first.map { String(format: "%02X", $0) } ?? "empty"
+        events.append("send:\(label):\(isFinal ? "final" : "audio")")
+        try await Task.sleep(for: sendDelay)
+    }
+
+    nonisolated func receiveResults() -> AsyncStream<TranscriptionResult> {
+        AsyncStream { continuation in
+            continuation.finish()
+        }
+    }
+
+    func disconnect() async {}
+
+    func snapshot() -> [String] {
+        events
     }
 }
