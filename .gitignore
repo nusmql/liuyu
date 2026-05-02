@@ -4,3 +4,5 @@ build/
 *.xcodeproj
 xcuserdata/
 .worktrees/
+.gitnexus
+.claude/
