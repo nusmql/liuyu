@@ -154,7 +154,10 @@ public class RecordingController: ObservableObject {
         do {
             try newEngine.start()
             isWarmedUp = true
-            Logger.info("Engine warmed up — pre-roll buffering active", category: .audio)
+            Logger.info(
+                "Engine warmed up — pre-roll buffering active inputRate=\(String(format: "%.0f", inputFormat.sampleRate)) inputChannels=\(inputFormat.channelCount) inputFormat=\(inputFormat.commonFormat.rawValue) interleaved=\(inputFormat.isInterleaved)",
+                category: .audio
+            )
         } catch {
             inputNode.removeTap(onBus: 0)
             newEngine.stop()
@@ -162,6 +165,14 @@ public class RecordingController: ObservableObject {
             self.engine = nil
             throw RecordingError.engineStartFailed(error)
         }
+    }
+
+    /// Recreate the engine/tap before a real recording session. This is more
+    /// defensive than warmUp(): devices can leave AVAudioEngine running while
+    /// the tap no longer delivers buffers after sleep/device changes.
+    public func restartWarmUp() throws {
+        coolDown()
+        try warmUp()
     }
 
     /// Release the audio engine and microphone.
@@ -225,6 +236,7 @@ public class RecordingController: ObservableObject {
 
         // Atomically flush pre-roll buffers to file and start recording
         audioState.startRecording(audioWriter: audioWriter)
+        Logger.info("Audio recording started diagnostics=\(audioState.diagnostics().traceDetails)", category: .audio)
 
         // Reset audio activity tracking
         lastAudioActivityTime = Date()
@@ -239,6 +251,7 @@ public class RecordingController: ObservableObject {
         audioState.stopRecording()
         let url = tempFileURL
         tempFileURL = nil
+        Logger.info("Audio recording stopped diagnostics=\(audioState.diagnostics().traceDetails)", category: .audio)
 
         // Log file size for debugging
         if let url,
@@ -311,9 +324,12 @@ public class RecordingController: ObservableObject {
     fileprivate nonisolated func processBuffer(_ buffer: AVAudioPCMBuffer,
                                                converter: AVAudioConverter?,
                                                audioState: AudioState) {
+        audioState.noteInputBuffer()
+
         // Convert to 16kHz mono PCM
         guard let converter else {
             Logger.debug("🎬 [PROCESS] No converter, skipping", category: .audio)
+            audioState.noteConversionFailure()
             return
         }
         let outputFrameCapacity = AVAudioFrameCount(
@@ -342,6 +358,7 @@ public class RecordingController: ObservableObject {
         }
 
         if error == nil && convertedBuffer.frameLength > 0 {
+            audioState.noteConvertedBuffer(frameLength: Int(convertedBuffer.frameLength))
             let normalized = normalizedPCM16BufferAudioLevel(convertedBuffer)
 
             // Only publish audio level while recording (avoids phantom UI updates)
@@ -358,6 +375,11 @@ public class RecordingController: ObservableObject {
 
             // AudioState routes the buffer to pre-roll ring buffer or audio file
             audioState.handleBuffer(convertedBuffer)
+        } else {
+            audioState.noteConversionFailure()
+            if let error {
+                Logger.warning("Audio conversion failed: \(error.localizedDescription)", category: .audio)
+            }
         }
     }
 }
@@ -546,6 +568,21 @@ func normalizedPCM16BufferAudioLevel(_ buffer: AVAudioPCMBuffer) -> Float {
     return max(0, min(1, (db + 50) / 50))
 }
 
+struct AudioStateDiagnostics: Equatable {
+    let inputBuffers: Int
+    let convertedBuffers: Int
+    let convertedFrames: Int
+    let conversionFailures: Int
+    let recordedBuffers: Int
+    let preRollBuffers: Int
+    let preRollFrames: Int
+    let accumulatedBytes: Int
+
+    var traceDetails: String {
+        "inputBuffers=\(inputBuffers) convertedBuffers=\(convertedBuffers) convertedFrames=\(convertedFrames) conversionFailures=\(conversionFailures) recordedBuffers=\(recordedBuffers) preRollBuffers=\(preRollBuffers) preRollFrames=\(preRollFrames) accumulatedBytes=\(accumulatedBytes)"
+    }
+}
+
 private extension Data {
     mutating func appendASCII(_ string: String) {
         append(string.data(using: .ascii)!)
@@ -573,6 +610,11 @@ fileprivate final class AudioState: @unchecked Sendable {
     private var _streamingHandler: AudioChunkHandler?
     private var _accumulatedData: Data = Data()
     private var _lastSentTime: Date = Date()
+    private var inputBufferCount = 0
+    private var convertedBufferCount = 0
+    private var convertedFrameCount = 0
+    private var conversionFailureCount = 0
+    private var recordedBufferCount = 0
 
     // Keep one second of converted 16kHz PCM pre-roll. Buffer duration varies by
     // input device, so frame count is the stable unit here.
@@ -585,6 +627,40 @@ fileprivate final class AudioState: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return _isRecording
+    }
+
+    func noteInputBuffer() {
+        lock.lock()
+        inputBufferCount += 1
+        lock.unlock()
+    }
+
+    func noteConvertedBuffer(frameLength: Int) {
+        lock.lock()
+        convertedBufferCount += 1
+        convertedFrameCount += frameLength
+        lock.unlock()
+    }
+
+    func noteConversionFailure() {
+        lock.lock()
+        conversionFailureCount += 1
+        lock.unlock()
+    }
+
+    func diagnostics() -> AudioStateDiagnostics {
+        lock.lock()
+        defer { lock.unlock() }
+        return AudioStateDiagnostics(
+            inputBuffers: inputBufferCount,
+            convertedBuffers: convertedBufferCount,
+            convertedFrames: convertedFrameCount,
+            conversionFailures: conversionFailureCount,
+            recordedBuffers: recordedBufferCount,
+            preRollBuffers: _preRollBuffers.count,
+            preRollFrames: _preRollFrameCount,
+            accumulatedBytes: _accumulatedData.count
+        )
     }
 
     /// Set the streaming handler for real-time audio streaming (e.g., WebSocket)
@@ -633,6 +709,8 @@ fileprivate final class AudioState: @unchecked Sendable {
         let pcmData = convertBufferToData(buffer)
 
         if _isRecording {
+            recordedBufferCount += 1
+
             // Write to file for persistence
             _audioWriter?.write(buffer)
 
@@ -793,6 +871,11 @@ fileprivate final class AudioState: @unchecked Sendable {
         let writer = _audioWriter
         _audioWriter = nil
         _streamingHandler = nil
+        inputBufferCount = 0
+        convertedBufferCount = 0
+        convertedFrameCount = 0
+        conversionFailureCount = 0
+        recordedBufferCount = 0
         lock.unlock()
         writer?.close()
     }

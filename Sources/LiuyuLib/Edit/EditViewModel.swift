@@ -737,7 +737,7 @@ public class EditViewModel: ObservableObject {
                 // Keep the engine warm while connecting so speech that starts
                 // immediately after the user clicks is retained in pre-roll.
                 trace("streaming.audio.prewarm.begin", token: token, category: .audio)
-                try recordingController.warmUp()
+                try recordingController.restartWarmUp()
                 trace("streaming.audio.prewarm.ready", token: token, category: .audio)
 
                 // Connect before starting formal recording. This avoids provider
