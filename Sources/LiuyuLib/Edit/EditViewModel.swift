@@ -95,7 +95,12 @@ func isWebSocketStreamingFormat(_ apiFormat: ApiFormat) -> Bool {
 }
 
 func shouldConnectBeforeRecordingStart(_ apiFormat: ApiFormat) -> Bool {
-    isWebSocketStreamingFormat(apiFormat)
+    switch apiFormat {
+    case .glmRealtime, .alibabaRealtime, .tencentRealtime:
+        return true
+    case .iflytekIAT, .whisperMultipart, .glmMultipartEventStream, .chatCompletionsAudio:
+        return false
+    }
 }
 
 func shouldPrewarmStreamingSession(_ apiFormat: ApiFormat) -> Bool {
@@ -776,6 +781,9 @@ public class EditViewModel: ObservableObject {
             recordingStartTime = Date()
             editState = .recording(audioLevel: 0)
             startSilenceDetection()
+            if !connectBeforeRecording {
+                trace("recording.started.streaming", token: token)
+            }
             if consumePendingStreamingStop(token: token, stage: "streaming.stop.afterAudioStart") {
                 await finishStreamingRecording(token: token)
                 return
@@ -790,7 +798,9 @@ public class EditViewModel: ObservableObject {
                 trace("streaming.connected.afterStop", token: token, category: .stt, details: "state=\(editState)")
                 return
             }
-            trace("recording.started.streaming", token: token)
+            if connectBeforeRecording {
+                trace("recording.started.streaming", token: token)
+            }
         } catch {
             guard guardCurrentTrace(token, stage: "streaming.start.catch") else { return }
             recordingFailed = true

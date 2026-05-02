@@ -116,11 +116,11 @@ final class EditPipelineStateTests: XCTestCase {
         XCTAssertFalse(isWebSocketStreamingFormat(.chatCompletionsAudio))
     }
 
-    func testStreamingProvidersConnectBeforeRecordingStartToAvoidStartupBacklog() {
+    func testStreamingProvidersChooseProviderSpecificStartOrder() {
         XCTAssertTrue(shouldConnectBeforeRecordingStart(.glmRealtime))
         XCTAssertTrue(shouldConnectBeforeRecordingStart(.alibabaRealtime))
         XCTAssertTrue(shouldConnectBeforeRecordingStart(.tencentRealtime))
-        XCTAssertTrue(shouldConnectBeforeRecordingStart(.iflytekIAT))
+        XCTAssertFalse(shouldConnectBeforeRecordingStart(.iflytekIAT))
         XCTAssertFalse(shouldConnectBeforeRecordingStart(.whisperMultipart))
         XCTAssertFalse(shouldConnectBeforeRecordingStart(.glmMultipartEventStream))
         XCTAssertFalse(shouldConnectBeforeRecordingStart(.chatCompletionsAudio))
