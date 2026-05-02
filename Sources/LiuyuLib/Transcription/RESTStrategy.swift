@@ -26,22 +26,27 @@ public actor RESTStrategy: TranscriptionStrategy {
 
     private var config: TranscriptionConfig?
     private var apiFormat: ApiFormat
-    private var session: URLSession
+    private let injectedSession: URLSession?
+    private let connectionPool: RESTConnectionPool
     private var continuation: AsyncStream<TranscriptionResult>.Continuation?
     private var pendingResults: [TranscriptionResult] = []
     private var pendingFinish = false
-    private static let sharedSession: URLSession = {
-        let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 30
-        return URLSession(configuration: config)
-    }()
 
     public init(
         apiFormat: ApiFormat = .whisperMultipart,
         session: URLSession? = nil
     ) {
+        self.init(apiFormat: apiFormat, session: session, connectionPool: .shared)
+    }
+
+    init(
+        apiFormat: ApiFormat = .whisperMultipart,
+        session: URLSession? = nil,
+        connectionPool: RESTConnectionPool
+    ) {
         self.apiFormat = apiFormat
-        self.session = session ?? Self.sharedSession
+        self.injectedSession = session
+        self.connectionPool = connectionPool
     }
 
     public func connect(config: TranscriptionConfig) async throws {
@@ -56,6 +61,11 @@ public actor RESTStrategy: TranscriptionStrategy {
         let totalStart = Date()
         Logger.info(
             "[STT REST] begin model=\(config.model) format=\(apiFormat.logName) audioBytes=\(data.count) estimatedAudio=\(estimatedPCM16MonoDuration(data.count)) host=\(hostDescription(config.endpoint))",
+            category: .stt
+        )
+        let connectionLease = restConnectionLease(for: config.endpoint)
+        Logger.info(
+            "[STT REST] connection.pool model=\(config.model) state=\(connectionLease.state.rawValue) key=\(connectionLease.keyDescription) sessions=\(connectionLease.sessionCount)",
             category: .stt
         )
 
@@ -78,9 +88,17 @@ public actor RESTStrategy: TranscriptionStrategy {
         let resultText: String
         switch apiFormat {
         case .glmMultipartEventStream:
-            resultText = try await executeEventStreamWithRetry(request: request, model: config.model)
+            resultText = try await executeEventStreamWithRetry(
+                request: request,
+                model: config.model,
+                session: connectionLease.session
+            )
         case .whisperMultipart, .chatCompletionsAudio:
-            resultText = try await executeWithRetry(request: request, model: config.model)
+            resultText = try await executeWithRetry(
+                request: request,
+                model: config.model,
+                session: connectionLease.session
+            )
         }
         Logger.info(
             "[STT REST] done model=\(config.model) total=\(formatSeconds(Date().timeIntervalSince(totalStart))) chars=\(resultText.count)",
@@ -145,7 +163,24 @@ public actor RESTStrategy: TranscriptionStrategy {
 
     // MARK: - Private Methods
 
-    private func executeWithRetry(request: URLRequest, model: String, retryCount: Int = 0) async throws -> String {
+    private func restConnectionLease(for endpoint: String) -> RESTConnectionLease {
+        if let injectedSession {
+            return RESTConnectionLease(
+                session: injectedSession,
+                state: .injected,
+                keyDescription: hostDescription(endpoint),
+                sessionCount: 0
+            )
+        }
+        return connectionPool.lease(for: endpoint)
+    }
+
+    private func executeWithRetry(
+        request: URLRequest,
+        model: String,
+        session: URLSession,
+        retryCount: Int = 0
+    ) async throws -> String {
         let data: Data
         let response: URLResponse
         let networkStart = Date()
@@ -162,7 +197,12 @@ public actor RESTStrategy: TranscriptionStrategy {
                     "[STT REST] network.retry model=\(model) retry=\(retryCount) error=\(error.localizedDescription)",
                     category: .stt
                 )
-                return try await executeWithRetry(request: request, model: model, retryCount: retryCount + 1)
+                return try await executeWithRetry(
+                    request: request,
+                    model: model,
+                    session: session,
+                    retryCount: retryCount + 1
+                )
             }
             Logger.error(
                 "[STT REST] network.failed model=\(model) retry=\(retryCount) duration=\(formatSeconds(Date().timeIntervalSince(networkStart))) error=\(error.localizedDescription)",
@@ -204,7 +244,12 @@ public actor RESTStrategy: TranscriptionStrategy {
                     category: .stt
                 )
                 try await Task.sleep(for: .seconds(2))
-                return try await executeWithRetry(request: request, model: model, retryCount: retryCount + 1)
+                return try await executeWithRetry(
+                    request: request,
+                    model: model,
+                    session: session,
+                    retryCount: retryCount + 1
+                )
             }
             throw TranscriptionError.rateLimited
         default:
@@ -213,7 +258,12 @@ public actor RESTStrategy: TranscriptionStrategy {
         }
     }
 
-    private func executeEventStreamWithRetry(request: URLRequest, model: String, retryCount: Int = 0) async throws -> String {
+    private func executeEventStreamWithRetry(
+        request: URLRequest,
+        model: String,
+        session: URLSession,
+        retryCount: Int = 0
+    ) async throws -> String {
         let bytes: URLSession.AsyncBytes
         let response: URLResponse
         let networkStart = Date()
@@ -230,7 +280,12 @@ public actor RESTStrategy: TranscriptionStrategy {
                     "[STT REST] eventStream.retry model=\(model) retry=\(retryCount) error=\(error.localizedDescription)",
                     category: .stt
                 )
-                return try await executeEventStreamWithRetry(request: request, model: model, retryCount: retryCount + 1)
+                return try await executeEventStreamWithRetry(
+                    request: request,
+                    model: model,
+                    session: session,
+                    retryCount: retryCount + 1
+                )
             }
             throw TranscriptionError.networkError(error.localizedDescription)
         }
@@ -285,7 +340,12 @@ public actor RESTStrategy: TranscriptionStrategy {
         case 429:
             if retryCount < 1 {
                 try await Task.sleep(for: .seconds(2))
-                return try await executeEventStreamWithRetry(request: request, model: model, retryCount: retryCount + 1)
+                return try await executeEventStreamWithRetry(
+                    request: request,
+                    model: model,
+                    session: session,
+                    retryCount: retryCount + 1
+                )
             }
             throw TranscriptionError.rateLimited
         default:
