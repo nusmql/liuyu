@@ -662,7 +662,6 @@ public class EditViewModel: ObservableObject {
                 trace(wasConnected ? "streaming.connect.reuse" : "streaming.connect.begin", token: token, category: .stt)
                 try await streamingSession?.connect()
                 guard guardCurrentTrace(token, stage: "streaming.connected") else {
-                    await cleanupStreaming(stopAudio: true)
                     return false
                 }
                 trace(wasConnected ? "streaming.connected.reused" : "streaming.connected", token: token, category: .stt)
@@ -704,7 +703,6 @@ public class EditViewModel: ObservableObject {
             trace("streaming.audio.start.begin", token: token, category: .audio)
             try recordingController.startStreaming(saveToFile: true)
             guard guardCurrentTrace(token, stage: "streaming.audio.started") else {
-                await cleanupStreaming(stopAudio: true)
                 return
             }
             trace("streaming.audio.started", token: token, category: .audio)
@@ -723,6 +721,7 @@ public class EditViewModel: ObservableObject {
             }
             trace("recording.started.streaming", token: token)
         } catch {
+            guard guardCurrentTrace(token, stage: "streaming.start.catch") else { return }
             recordingFailed = true
             errorMessage = error.localizedDescription
             editState = .idle
